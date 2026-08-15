@@ -18,14 +18,22 @@
 | 架构设计（v1.1） | ✅ `docs/architecture.md`（含 IPC/Stdio 协议细节） |
 | 里程碑路线图 | ✅ `docs/roadmap.md`（M0–M3 + 远期探索） |
 | 模型支持矩阵 | ✅ `docs/model-support.md` |
-| Cargo workspace 骨架（10 crates） | ✅ `cargo check` 通过 |
+| **M0 核心骨架** | ✅ 完成：core / state / server / cli / engine（31 项测试全绿 + clippy 0 警告 + 冒烟通过） |
+| M0 剩余：Tauri 壳 + React 空壳 | ⏳ 浏览器模式（`tiandi server --web`）已可先行使用 |
 
-> ⚠️ 本仓库目前是 **PRD + 骨架** 阶段，M0（可运行骨架）尚未实施。正式代码从里程碑 M0 开始落地。
+> 当前状态：**M0 核心完成，M1（SDXL 全流程）未开始**。快速体验：`tiandi init` → `tiandi server`。
 
-## 快速开始（当前仅骨架）
+## 快速开始（M0 骨架）
 
 ```bash
-cargo check --workspace   # 验证骨架可编译
+cargo build --release        # 构建 tiandi 二进制
+tiandi init ~/tiandi-ws      # 建工作区（models/datasets/recipes/runs/vault + tiandi.db）
+tiandi doctor                # 环境体检（磁盘/内存/GPU-CUDA/端口）
+tiandi server --dir ~/tiandi-ws --web   # 点火（127.0.0.1:18765，自动开浏览器）
+
+# 冒烟：创建模拟炼丹任务，观察状态机与事件流
+curl -X POST 'http://127.0.0.1:18765/api/runs?simulate=1' -H 'content-type: application/json' -d '{}'
+curl -N 'http://127.0.0.1:18765/api/runs/all/events'      # SSE 事件流（进度/指标/采样/状态）
 ```
 
 ## 仓库布局

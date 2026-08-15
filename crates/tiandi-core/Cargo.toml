@@ -7,3 +7,9 @@ rust-version.workspace = true
 description = "领域模型与用例：项目/基底模型/数据集/丹方/任务状态机、事件总线"
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true

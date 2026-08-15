@@ -7,3 +7,7 @@ rust-version.workspace = true
 description = "训练引擎抽象：Trainer trait、任务状态机、事件协议"
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tiandi-core = { path = "../tiandi-core" }

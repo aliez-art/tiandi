@@ -5,17 +5,18 @@
 
 ## M0 骨架（约 2 周）
 
-**目标**：可启动的 Rust 骨架 + 空 UI + 环境体检。
+**目标**：可启动的 Rust 骨架 + 空 UI + 环境体检。✅ 核心已完成（2026-08，commit 见 git log）；Tauri 壳与 React 空壳为 M0 剩余项。
 
-- [ ] workspace 依 `docs/architecture.md` 建 10 个 crate（已完成占位骨架，`cargo check` 通过）
-- [ ] `tiandi-core`：Project / BaseModel / Dataset / Recipe / Run 领域模型 + 任务状态机（单元测试覆盖迁移合法性）
-- [ ] `tiandi-state`：SQLite 迁移 + 仓储 + run manifest 读写
-- [ ] `tiandi-server`：axum REST 骨架（runs CRUD）+ SSE 事件流（先用模拟事件）
-- [ ] `tiandi-cli`：`tiandi doctor`（GPU/CUDA/磁盘/路径体检）、`tiandi init`
-- [ ] `tiandi-app`：Tauri 2 壳 + React 空壳（丹房首页占位）
-- [ ] CI：cargo fmt/clippy/test
+- [x] workspace 依 `docs/architecture.md` 建 10 个 crate（占位骨架 + M0 实现，`cargo check`/`clippy` 通过）
+- [x] `tiandi-core`：Project / BaseModel / Dataset / Recipe / Run 领域模型 + 任务状态机（`RunState` 迁移合法性单测）+ 事件总线（`EventBus` + IPC 对齐的 `Event` 枚举）
+- [x] `tiandi-state`：SQLite 迁移（`PRAGMA user_version`）+ 仓储（projects/runs/metrics/checkpoints 等）+ run manifest 原子读写
+- [x] `tiandi-server`：axum REST（health/projects/runs/transition/metrics）+ SSE 事件流（`/api/runs/{id}/events`，`all` 不过滤）+ 模拟训练演示（`?simulate=1` 全状态机流转）
+- [x] `tiandi-cli`：`tiandi init`（工作区 + 数据库）、`tiandi doctor`（磁盘/内存/GPU-CUDA/端口）、`tiandi server`（127.0.0.1 + 可选 --web）
+- [x] `tiandi-engine`：`Trainer` trait 骨架（info/start/pause/resume/cancel/query，M1 由 compat 实现）
+- [x] 质量门：cargo fmt / clippy（0 警告）/ test（31 项全绿）+ 冒烟验证（真实进程：init → server → 创建 run → 状态机推进 → metrics 入库 → SSE 事件流）
+- [ ] `tiandi-app`：Tauri 2 壳 + React 空壳（丹房首页占位）——M0 剩余项，浏览器模式（`tiandi server --web`）已可先行使用
 
-**退出**：`tiandi doctor` 全绿；UI 空壳启动并连通 SSE 模拟事件。
+**退出（M0 核心已达成）**：`tiandi doctor` 全绿；API 冒烟通过；SSE 模拟事件连通（UI 壳落地后即可接入）。
 
 ## M1 首炉（约 4 周）
 

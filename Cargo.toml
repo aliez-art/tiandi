@@ -10,4 +10,19 @@ repository = "https://github.com/local/tiandi"
 rust-version = "1.97"
 
 [workspace.dependencies]
-# 占位：正式依赖（tokio/axum/tauri/serde/sqlx/rayon/image/candle 等）在 PRD v1.0 定稿后按里程碑引入
+# M0 基础依赖（v1.1 架构定稿后按里程碑引入；M1 将追加 rayon/image/notify 等）
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net"] }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+sysinfo = "0.33"
+webbrowser = "1.0"
+tempfile = "3"

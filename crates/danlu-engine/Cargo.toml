@@ -1,0 +1,9 @@
+[package]
+name = "danlu-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "训练引擎抽象：Trainer trait、任务状态机、事件协议"
+
+[dependencies]

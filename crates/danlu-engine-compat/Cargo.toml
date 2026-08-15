@@ -1,0 +1,9 @@
+[package]
+name = "danlu-engine-compat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "兼容引擎：受管 Python sd-scripts 运行时桥（进程监督 + 日志解析 + 事件流）"
+
+[dependencies]

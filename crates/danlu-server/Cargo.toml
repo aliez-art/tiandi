@@ -1,0 +1,9 @@
+[package]
+name = "danlu-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "本地服务：axum REST + SSE 事件流、静态资源"
+
+[dependencies]

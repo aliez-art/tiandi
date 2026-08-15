@@ -1,0 +1,9 @@
+[package]
+name = "danlu-dataset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "数据管线：图像解码/哈希去重/缩略图/分桶/统计（rayon 并行）"
+
+[dependencies]

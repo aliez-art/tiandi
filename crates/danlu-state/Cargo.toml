@@ -1,0 +1,9 @@
+[package]
+name = "danlu-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "SQLite 持久化：迁移、仓储、运行清单 manifest"
+
+[dependencies]

@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/local/danlu"
+rust-version = "1.97"
+
+[workspace.dependencies]
+# 占位：正式依赖（tokio/axum/tauri/serde/sqlx/rayon/image/candle 等）在 PRD v1.0 定稿后按里程碑引入

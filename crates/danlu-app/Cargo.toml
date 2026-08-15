@@ -1,0 +1,9 @@
+[package]
+name = "danlu-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Tauri 2 桌面壳：托盘、系统通知、窗口"
+
+[dependencies]

@@ -1,0 +1,9 @@
+[package]
+name = "danlu-engine-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "原生引擎（R&D）：candle 训练循环（VAE 编码/时间步采样/LoRA/优化器）"
+
+[dependencies]

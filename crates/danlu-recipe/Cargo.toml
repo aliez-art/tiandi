@@ -1,0 +1,9 @@
+[package]
+name = "danlu-recipe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "丹方：schema 校验、内置预设、TOML 读写"
+
+[dependencies]

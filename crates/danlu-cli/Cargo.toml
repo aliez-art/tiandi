@@ -1,0 +1,9 @@
+[package]
+name = "danlu-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "命令行：danlu run/import/doctor 等"
+
+[dependencies]

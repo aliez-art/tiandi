@@ -1,4 +1,4 @@
-# 丹炉 DanLu — 模型支持矩阵（v1.0）
+# 天地熔炉 Tiandi Furnace — 模型支持矩阵（v1.1）
 
 > 数据来源：PRD 附录 A 的三项目代码审查 + 2026-08 公开资料（HuggingFace / diffusers 文档）。表格中的"支持"指**训练侧**支持（非仅推理）。
 
@@ -20,15 +20,16 @@
 | Krea 2 | ✅ krea2 arch（唯一参考） | ❌ 零引用 | ❌ 零引用 |
 | 其他 | flux/qwen-image/wan 等大量 | SD3/Hunyuan/Lumina/Flux | sd1.5/dreambooth/flux |
 
-## 3. 丹炉支持策略（按里程碑）
+## 3. 熔炉支持策略（按里程碑）
 
 | 里程碑 | SDXL 族（NoobAI/Illusion） | DiT 族（Anima） | DiT 族（Krea 2） |
 |---|---|---|---|
 | M1 | ✅ BackendSdScripts（P0 首跑） | — | — |
 | M2 | ✅ 完善（队列/续训/监控） | ✅ BackendSdScripts（anima_train_network.py，参考 lora-scripts-next 参数组合） | — |
-| M3 | ✅ Rust 数据管线/VAE 缓存接入 | ✅ 同上 + Rust 侧缓存 | ✅ BackendAiToolkit（YAML + run.py）+ 许可调研 |
-| M4 | ✅ 原生引擎（candle） | — | — |
-| M5 | — | ✅ 原生引擎 | ✅ 原生引擎（视调研结论） |
+| M3 | ✅ 自动化 CLI + 缓存管理 | ✅ 同上 | ✅ BackendAiToolkit（YAML + run.py）+ 许可调研 |
+| 远期探索 | — | — | candle 原生训练（不排期，见 PRD §8.4） |
+
+> 注：训练计算内核始终为 Python（IPC/Stdio 通信，PRD ADR-001）；"远期探索"仅指 Rust 原生候选能力，不进入主线。
 
 ## 4. 各模型训练要点备忘（供丹方预设取值参考）
 
@@ -42,4 +43,4 @@
 - [ ] Krea 2 训练侧是否已有社区实现（除 ai-toolkit 外）
 - [ ] Anima 上游（circlestone-labs / sorryhyun/anima_lora）活跃度与 commit 锁定策略
 - [ ] Illusion 具体检查点确认（与用户核对：哪个发行版、是否含 refiner/VAE 变体）
-- [ ] candle 推理侧对 SDXL 的覆盖度验证（作为 M4 前置）
+- [ ] （远期探索）candle 推理侧对 SDXL 的覆盖度验证——仅在原生能力进入主线评审时进行

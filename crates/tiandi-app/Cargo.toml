@@ -1,9 +1,9 @@
 [package]
-name = "danlu-core"
+name = "tiandi-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "领域模型与用例：项目/基底模型/数据集/丹方/任务状态机、事件总线"
+description = "Tauri 2 桌面壳：托盘、系统通知、窗口"
 
 [dependencies]

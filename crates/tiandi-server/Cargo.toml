@@ -1,9 +1,9 @@
 [package]
-name = "danlu-cli"
+name = "tiandi-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "命令行：danlu run/import/doctor 等"
+description = "本地服务：axum REST + SSE 事件流、静态资源"
 
 [dependencies]

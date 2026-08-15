@@ -1,8 +1,8 @@
-# 丹炉 DanLu
+# 天地熔炉 Tiandi Furnace
 
-> **你的私人 LoRA 训练丹炉。** 投料 · 控火 · 开炉 —— 把「图包 → 丹方 → 丹药（LoRA）」压缩成一个顺手的本地工作台。
+> **你的私人 LoRA 训练熔炉。** 投料 · 控火 · 开炉 —— 把「图包 → 丹方 → 丹药（LoRA）」压缩成一个顺手的本地工作台。
 
-丹炉是一个用 **Rust 重写**的私人（单人、本机）LoRA 训练工具，融合了三个成熟 Python 项目的能力与经验：
+熔炉是一个用 **Rust 重写**的私人（单人、本机）LoRA 训练工具，融合了三个成熟 Python 项目的能力与经验：
 
 - [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit) —— 模块化训练框架、时间步/损失技巧、Krea 2 / Anima 训练实现
 - [bmaltais/kohya_ss](https://github.com/bmaltais/kohya_ss) —— 最全训练参数面（25 优化器 / 20 网络结构 / 缓存 / 元数据）
@@ -14,9 +14,9 @@
 
 | 项目 | 状态 |
 |---|---|
-| 产品需求文档（PRD v1.0） | ✅ 已定稿（三项目代码审查已合入） |
-| 架构设计（v0.9 草案） | ✅ `docs/architecture.md` |
-| 里程碑路线图 | ✅ `docs/roadmap.md` |
+| 产品需求文档（PRD v1.1） | ✅ 已定稿（含 ADR-001：Rust 控制/数据引擎 + Python 训练内核，IPC/Stdio） |
+| 架构设计（v1.1） | ✅ `docs/architecture.md`（含 IPC/Stdio 协议细节） |
+| 里程碑路线图 | ✅ `docs/roadmap.md`（M0–M3 + 远期探索） |
 | 模型支持矩阵 | ✅ `docs/model-support.md` |
 | Cargo workspace 骨架（10 crates） | ✅ `cargo check` 通过 |
 
@@ -31,29 +31,29 @@ cargo check --workspace   # 验证骨架可编译
 ## 仓库布局
 
 ```text
-danlu/
-├── PRD.md                # 产品需求文档（v1.0）
+tiandi/
+├── PRD.md                # 产品需求文档（v1.1）
 ├── docs/
-│   ├── architecture.md   # 技术架构（crate 分层、领域模型、引擎协议）
-│   ├── roadmap.md        # 里程碑 M0–M5
+│   ├── architecture.md   # 技术架构（crate 分层、领域模型、IPC/Stdio 引擎协议）
+│   ├── roadmap.md        # 里程碑 M0–M3 + 远期探索
 │   └── model-support.md  # 模型支持矩阵与训练要点
 ├── crates/
-│   ├── danlu-core        # 领域模型与用例、任务状态机
-│   ├── danlu-state       # SQLite 持久化
-│   ├── danlu-dataset     # 数据管线（图像/去重/分桶/缓存）
-│   ├── danlu-recipe      # 丹方 schema、校验、预设
-│   ├── danlu-engine      # Trainer trait、事件协议
-│   ├── danlu-engine-compat   # 兼容引擎（sd-scripts / ai-toolkit 双后端）
-│   ├── danlu-engine-native   # 原生引擎（candle，R&D）
-│   ├── danlu-server      # axum REST + SSE
-│   ├── danlu-cli         # danlu run/import/doctor
-│   └── danlu-app         # Tauri 2 桌面壳
+│   ├── tiandi-core        # 领域模型与用例、任务状态机
+│   ├── tiandi-state       # SQLite 持久化
+│   ├── tiandi-dataset     # 数据管线（图像/去重/分桶/缓存）
+│   ├── tiandi-recipe      # 丹方 schema、校验、预设
+│   ├── tiandi-engine      # Trainer trait、IPC 事件协议
+│   ├── tiandi-engine-compat   # Python 内核编排（sd-scripts / ai-toolkit 双后端）
+│   ├── tiandi-engine-native   # candle（远期探索，不排期）
+│   ├── tiandi-server      # axum REST + SSE
+│   ├── tiandi-cli         # tiandi run/import/doctor
+│   └── tiandi-app         # Tauri 2 桌面壳
 └── Cargo.toml            # workspace
 ```
 
 ## 核心架构决策（详见 PRD §8）
 
-1. **Rust 为核心，引擎可替换**：训练引擎抽象为 `Trainer` trait；第一代「兼容引擎」以受管 Python 运行时（sd-scripts / ai-toolkit）保证立即可用，随后按里程碑用 candle 渐进原生化。
+1. **Rust 控制/数据引擎 + Python 训练计算内核（ADR-001）**：训练由受管 Python 子进程（sd-scripts / ai-toolkit，独立 venv + 锁版本）承担，Rust 侧以 **IPC/Stdio 流**编排（JSON Lines 双向事件/控制通道 + 心跳 + 文件监控冗余）；放弃 PyO3 绑定（理由见 PRD §8.3）。
 2. **丹方（Recipe）一等公民**：训练配置为 TOML 文件，可命名/继承/版本化/校验。
 3. **任务可断可续**：持久化队列 + 状态机 + manifest，崩溃后一键续丹。
 4. **产物互操作**：kohya 元数据与 keymaps 字节级兼容，产物可被 ComfyUI / A1111 加载。

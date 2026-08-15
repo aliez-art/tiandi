@@ -1,10 +1,10 @@
-# 丹炉 DanLu — 私人 LoRA 训练丹炉 · 产品需求文档（PRD）
+# 天地熔炉 Tiandi Furnace — 私人 LoRA 训练熔炉 · 产品需求文档（PRD）
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v1.0（定稿：三项目代码审查报告已合入，见附录 A） |
+| 文档版本 | v1.1（定稿：架构决策——Rust 控制/数据引擎 + Python 训练内核，IPC/Stdio 通信；项目更名「天地熔炉」） |
 | 状态 | 已定稿 |
-| 目标仓库 | `D:\Projects\danlu` |
+| 目标仓库 | `D:\Projects\tiandi` |
 | 定位 | 单人、本机、私有使用的 LoRA 训练工具（Rust 重写） |
 | 覆盖模型 | SDXL 族（Illusion、NoobAI）· DiT 族（Anima、Krea 2） |
 
@@ -12,10 +12,10 @@
 
 ## 1. 摘要（TL;DR）
 
-把三个 Python 生态的 LoRA 训练工具 —— ai-toolkit（ostris）、kohya_ss（bmaltais）、lora-scripts-next（wochenlong）—— 合并重写为**一个用 Rust 实现核心、配全新 UI/UX 的私人炼丹工具「丹炉 DanLu」**：
+把三个 Python 生态的 LoRA 训练工具 —— ai-toolkit（ostris）、kohya_ss（bmaltais）、lora-scripts-next（wochenlong）—— 合并重写为**一个用 Rust 实现核心、配全新 UI/UX 的私人炼丹工具「天地熔炉 Tiandi Furnace」**：
 
 - **Rust 做骨**：领域模型、数据管线（图像处理、去重、分桶、缓存）、配方系统、任务状态机、本地服务、桌面 UI 全部 Rust 原生；单二进制分发、启动快、内存可控、无 Python 环境地狱。
-- **引擎分层**：训练引擎抽象为 `Trainer` 接口，第一代提供「兼容引擎」（受管的 Python sd-scripts 运行时，JSON-RPC 桥接，锁定版本），确保产品**从 M1 起即可用**；同时按里程碑用 Rust（candle）逐步替换数据管线 → VAE 编码 → 训练循环，走向全原生。
+- **引擎分层（v1.1 定稿）**：训练计算内核保持 **Python**（sd-scripts / ai-toolkit），Rust 与内核之间采用 **IPC/Stdio 流**通信（明确放弃 PyO3 直接绑定，理由见 §8.3 ADR）；训练引擎抽象为 `Trainer` 接口，多内核驱动可插拔，确保产品**从 M1 起即可用**；Rust 原生训练内核列为**远期探索**（不承诺、不排期）。
 - **模型支持**：SDXL 族（Illusion、NoobAI，同属 SDXL-1.0 基线）走成熟 SDXL LoRA 管线；DiT 族（Anima、Krea 2）走 DiT 管线；Anima 已有两个参考项目实现可借鉴，Krea 2 是绿地（需前置调研）。
 - **全新 UI/UX**：以「炼丹」为隐喻的产品语言（投料 → 控火 → 开炉），深色琉璃质感界面，工作流向导 + 火候仪表盘 + 实时采样画廊，中文优先。
 
@@ -48,11 +48,11 @@
 - **分发与运维**：单二进制 + 可选内置 Python 运行时；无 pip/venv/版本冲突；升级即换文件。
 - **性能**：图像解码/哈希/去重/分桶/缩略图等数据管线用 `rayon` 全并行，比 Python 快一到两个数量级；VAE 编码前的图像预处理可在 Rust 侧完成。
 - **健壮性**：类型系统承载配方校验与任务状态机；崩溃恢复、日志、诊断都是编译期约束。
-- **长期目标**：candle 已具备 SD1.5/SDXL/Flux 的推理侧实现，训练侧可逐步自研（见 §8.3 与路线图），最终摆脱 Python。
+- **价值定位（v1.1 定稿）**：Rust 承担**控制与数据引擎**（UI/API、任务编排、数据集、丹方、产物、监控、进程监督），训练计算保持 Python 内核；不追求"全面 Rust 化"——candle 训练循环不排期，列为远期探索（§8.4）。
 
 ### 2.3 诚实的边界（可行性声明）
 
-Rust 生态目前**没有**成熟的 SDXL/DiT LoRA 训练库：candle/burn 提供算子与推理模型，但训练循环（时间步采样、损失调度、EMA、块权重、桶采样器、缓存管理）需自行实现，属 R&D 级工作量。因此本 PRD 采用**混合架构**：Rust 为核心 + 双引擎（兼容引擎先行、原生引擎渐进），这是"可行"的关键决策，详见 §8。
+Rust 生态目前**没有**成熟的 SDXL/DiT LoRA 训练库：candle/burn 提供算子与推理模型，但训练循环（时间步采样、损失调度、EMA、块权重、桶采样器、缓存管理）需自行实现，属 R&D 级工作量且收益有限（训练瓶颈在 CUDA 内核，换语言不改算力）。因此 v1.1 定稿的长期架构为：**Rust 控制/数据引擎 + Python 训练计算内核，二者以 IPC/Stdio 流通信**（放弃 PyO3 直接绑定，理由见 §8.3 ADR）。该架构"可行"的依据：三个参考项目本质都是"编排进程 + Python 训练子进程"模式（kohya_ss/lora-scripts-next 的 accelerate launch、ai-toolkit 的 UI 独立进程 + 队列），已被社区大规模验证；Rust 的价值集中在编排、数据、UX 与运维，详见 §8。
 
 ---
 
@@ -73,12 +73,12 @@ Rust 生态目前**没有**成熟的 SDXL/DiT LoRA 训练库：candle/burn 提�
 
 | 方案 | 理由 | 备注 |
 |---|---|---|
-| **丹炉 DanLu**（主推） | 直接呼应"炼丹"心智；双字节好记；仓库名 `danlu` | repo: `danlu` |
+| **天地熔炉 Tiandi Furnace**（主推） | 直接呼应"炼丹"心智；双字节好记；仓库名 `tiandi` | repo: `tiandi` |
 | Crucible（坩埚） | 英文语境下的炼丹容器，意象契合 | 备选 |
 | LoraForge | 直白，但缺个性 | 备选 |
 | HuLu（葫芦） | 中国味足，但意象偏收纳 | 备选 |
 
-> 本 PRD 定名 **丹炉 DanLu**，仓库 `D:\Projects\danlu`。
+> 本 PRD 定名 **天地熔炉 Tiandi Furnace**，仓库 `D:\Projects\tiandi`。
 
 ---
 
@@ -144,7 +144,7 @@ Rust 生态目前**没有**成熟的 SDXL/DiT LoRA 训练库：candle/burn 提�
 ### 5.7 队列与自动化（P1，L/A）
 
 - FR-701 任务队列：多任务排队、串行执行、失败不阻断后续（可配置）、完成后动作（通知/关机）。
-- FR-702 自动化接口：CLI 模式（`danlu run recipe.toml`），为后续脚本化/定时炼丹铺路（A 的虚拟队列思路）。
+- FR-702 自动化接口：CLI 模式（`tiandi run recipe.toml`），为后续脚本化/定时炼丹铺路（A 的虚拟队列思路）。
 
 ### 5.8 监控与系统信息（P1，L）
 
@@ -186,7 +186,7 @@ ModelFamily
 
 ### 6.2 支持现状与结论（三项目逐项核实）
 
-| 模型 | 家族 | ai-toolkit | kohya_ss | lora-scripts-next | 丹炉策略 |
+| 模型 | 家族 | ai-toolkit | kohya_ss | lora-scripts-next | 策略 |
 |---|---|---|---|---|---|
 | NoobAI | SDXL-1.0 | legacy 路径（无示例） | 成熟（sdxl_train_network.py） | 成熟（sdxl master 页，v-pred/rectified-flow） | **P0：兼容引擎 sd-scripts 后端首跑目标** |
 | Illusion | SDXL-1.0 | 同 SDXL 路径 | 同 SDXL 路径 | 通用 sdxl 页（无专有条目） | **P0：与 NoobAI 同一 SDXL 丹方族**，仅注册表选不同检查点 |
@@ -218,21 +218,24 @@ ModelFamily
 │  UI 层    Tauri 2 桌面壳（可选纯浏览器模式）          │
 │           React 18 + TypeScript + Vite               │
 ├─────────────────────────────────────────────────────┤
-│  API 层   danlu-server（axum）                       │
+│  API 层   tiandi-server（axum）                       │
 │           REST + SSE（进度/日志/采样图事件流）        │
 ├─────────────────────────────────────────────────────┤
-│  应用层   danlu-core（领域模型/用例）                │
+│  应用层   tiandi-core（领域模型/用例）                │
 │           项目/基底模型/数据集/丹方/任务 状态机       │
-│           danlu-state（SQLite 持久化）               │
+│           tiandi-state（SQLite 持久化）               │
 ├─────────────────────────────────────────────────────┤
 │  引擎层   Trainer trait（多后端驱动）                  │
-│           ├── danlu-engine-compat                     │
+│           ├── tiandi-engine-compat（IPC/Stdio 桥）      │
 │           │     ├── BackendSdScripts（sd-scripts, P0）│
 │           │     └── BackendAiToolkit（ai-toolkit, P1）│
-│           └── danlu-engine-native   (candle, R&D)     │
+│           └── tiandi-engine-native（candle，远期探索） │
 ├─────────────────────────────────────────────────────┤
-│  基础设施 danlu-dataset（rayon 图像管线）             │
-│           danlu-recipe（serde 校验）                  │
+│  计算内核  Python 子进程（训练/打标/VAE 编码/采样出图）│
+│          受管 venv + 锁版本；stdin 控制 / stdout 事件 │
+├─────────────────────────────────────────────────────┤
+│  基础设施 tiandi-dataset（rayon 图像管线）             │
+│           tiandi-recipe（serde 校验）                  │
 │           tracing / notify / 进程监督                 │
 └─────────────────────────────────────────────────────┘
 ```
@@ -241,46 +244,51 @@ ModelFamily
 
 | crate | 职责 |
 |---|---|
-| `danlu-core` | 领域模型（Project/BaseModel/Dataset/Recipe/Run/Checkpoint/Metric）、用例服务、事件总线（tokio broadcast） |
-| `danlu-state` | SQLite（rusqlite/sqlx）迁移与仓储；运行清单（manifest）落盘 |
-| `danlu-dataset` | 图像解码（image）、EXIF、哈希去重、缩略图、桶算法、数据集统计 |
-| `danlu-recipe` | 丹方 schema（serde）、校验器、内置预设、TOML 读写 |
-| `danlu-engine` | `Trainer` trait、事件协议、任务状态机 |
-| `danlu-engine-compat` | Python 桥：多后端驱动（SdScripts / AiToolkit）、venv 管理、进程监督、进度/日志解析、参数映射 |
-| `danlu-engine-native` | （R&D）candle 训练循环：VAE 编码、时间步采样、LoRA 权重、优化器 |
-| `danlu-server` | axum REST + SSE、静态资源服务 |
-| `danlu-cli` | `danlu` 命令行（run/import/doctor 等） |
-| `danlu-app` | Tauri 2 壳（托盘、通知、窗口） |
+| `tiandi-core` | 领域模型（Project/BaseModel/Dataset/Recipe/Run/Checkpoint/Metric）、用例服务、事件总线（tokio broadcast） |
+| `tiandi-state` | SQLite（rusqlite/sqlx）迁移与仓储；运行清单（manifest）落盘 |
+| `tiandi-dataset` | 图像解码（image）、EXIF、哈希去重、缩略图、桶算法、数据集统计 |
+| `tiandi-recipe` | 丹方 schema（serde）、校验器、内置预设、TOML 读写 |
+| `tiandi-engine` | `Trainer` trait、事件协议、任务状态机 |
+| `tiandi-engine-compat` | Python 桥：多后端驱动（SdScripts / AiToolkit）、venv 管理、进程监督、进度/日志解析、参数映射 |
+| `tiandi-engine-native` | （远期探索）candle 训练循环：VAE 编码、时间步采样、LoRA 权重、优化器 |
+| `tiandi-server` | axum REST + SSE、静态资源服务 |
+| `tiandi-cli` | `tiandi` 命令行（run/import/doctor 等） |
+| `tiandi-app` | Tauri 2 壳（托盘、通知、窗口） |
 
-### 8.3 兼容引擎（P0，可行性基石）
+### 8.3 通信架构（IPC/Stdio）与兼容引擎（P0，可行性基石）
+
+> **ADR-001（v1.1 定稿）：放弃 PyO3 直接绑定，Rust 控制/数据引擎与 Python 训练内核采用 IPC/Stdio 流通信。**
+> 理由：① 进程隔离——训练内核 OOM/segfault/崩溃不拖垮 UI 与任务编排（PyO3 同进程则一损俱损）；② 版本独立——两个 Python 内核（sd-scripts / ai-toolkit）各有独立 venv、甚至不同 Python 版本，PyO3 绑定无法同时服务，IPC 则各挂各的子进程；③ 部署简单——无需链接 libpython、无需随 CPython 版本重编译；④ 可观测可复现——内核输出即日志，可脱离 UI 手动复跑同一命令排查；⑤ 三个参考项目（accelerate launch / 独立 UI 进程 + 队列）已验证该模式在 Windows 上的可靠性。
 
 - **受管运行时**：首次使用引导创建独立 venv，依赖清单锁定（torch/CUDA 版本、sd-scripts / ai-toolkit 的 commit），`doctor` 命令体检；升级是显式动作。
 - **双后端驱动**（`CompatBackend` trait）：
   - `BackendSdScripts`（P0）：SDXL / Anima。配置走 TOML + `accelerate launch <脚本> --config_file`（kohya_ss 现代用法），Anima 参数参考 lora-scripts-next 验证过的组合（Qwen3 TE、attn 模式探测、CAME+fp16→bf16 防 NaN）。
   - `BackendAiToolkit`（P1）：Krea 2（唯一现成路径）。配置走 YAML + `run.py` 调用，复用其 krea2 arch 的参数面（SingleStreamDiT 目标层、Qwen3-VL TE、edit 模式选项）。
-- **协议**：Rust 侧生成任务配置 → 启动训练进程 → 解析 stdout/stderr 进度（进度行、loss、采样完成、错误尾部）+ 文件事件兜底 → Rust 侧统一转 SSE 推给 UI；控制指令（暂停=进程级挂起，取消=kill-tree，参考 kohya_ss CommandExecutor）。
+- **IPC/Stdio 协议**（详见 `docs/architecture.md` §5）：
+  - 事件通道：内核 stdout 输出 **JSON Lines**（每行一个事件：`hello` 握手 / `progress` / `log` / `sample` / `done` / `fail`），人类可读日志同时落文件双写；
+  - 控制通道：Rust 写内核 stdin（JSON Lines 命令：`pause` / `resume` / `cancel` / `query`），Windows 取消兜底 = Job Object 杀进程树；
+  - 冗余：采样图/checkpoint 落盘目录由 Rust 侧文件监控（notify）兜底，事件流断线不丢产物；心跳超时触发卡死检测（参考 lora-scripts-next）。
 - **参数映射**：以 kohya_ss `lora_gui.py` 的控件→TOML 映射表（2147–2556 行）为主干，叠加 lora-scripts-next 的 sanitize/Anima 默认值逻辑与 ai-toolkit 的 YAML 字段面，整理为 Rust 侧声明式映射表（全参数覆盖、零隐藏、单测对照）。
-- **版本锁定**：兼容引擎的 venv 依赖与 Python 仓库 commit 全部锁定（参考 lora-scripts-next 三快照做法，但收敛为单份锁定快照 + 清单校验），避免上游破坏性变更。
+- **版本锁定**：内核 venv 依赖与 Python 仓库 commit 全部锁定（参考 lora-scripts-next 三快照做法，但收敛为单份锁定快照 + 清单校验），避免上游破坏性变更。
 
-### 8.4 原生引擎（R&D，渐进替换）
+### 8.4 远期探索：原生 Rust 训练内核（不排期、不承诺）
 
-按"风险从低到高"替换 Python 组件：
-1. **数据管线**（M3）：图像处理/哈希/缩略图/桶全 Rust —— 兼容引擎可直接消费 Rust 产出的数据集与缓存。
-2. **VAE 编码缓存**（M3）：candle 加载 VAE 编码器，批量产 latent（.npy/.safetensors），训练端复用（K 的 cache_latents 思路）。
-3. **打标器**（M3）：ONNX Runtime 跑 WD14/Florence 类模型。
-4. **训练循环**（M4）：candle 实现 SDXL LoRA（时间步采样、eps 损失、AdamW/Adafactor、EMA、块权重），以"与兼容引擎产出一致性对比测试"为验收。
-5. **DiT 训练**（M5）：Anima 先行（有参考实现），Krea 2 视调研结论。
+v1.1 起，**Rust 原生训练内核不再进入路线图**（用户决策：全面 Rust 化收益低、成本高——训练瓶颈在 CUDA 内核，换语言不改算力）。仅保留如下**可选项**供未来评估（任一都需先满足 §12 验收标准）：
+
+1. Rust ONNX Runtime 打标器（数据引擎延伸，替代内核打标进程）；
+2. candle 推理（训练中采样逐步切换，减少对内核采样实现的依赖）；
+3. candle 训练循环（SDXL → DiT），以"与 Python 内核产出一致性对比测试"为前置验收。
 
 ### 8.5 数据与状态
 
 - SQLite 存领域数据（项目/数据集/丹方/任务/指标点/日志索引）；大文件（模型、缓存 latent、采样图）存磁盘目录，库中只存路径与哈希。
-- 任务运行清单（manifest.json）落盘于任务目录，崩溃后由 `danlu-core` 恢复状态机。
+- 任务运行清单（manifest.json）落盘于任务目录，崩溃后由 `tiandi-core` 恢复状态机。
 
 ---
 
 ## 9. UI / UX 设计（全新设计）
 
-### 9.1 设计语言：丹炉隐喻
+### 9.1 设计语言：熔炉隐喻
 
 - **概念映射**：数据集=药材，打标=拣药，丹方=火候与配比，训练=控火炼丹，LoRA=丹药，队列=多炉连烧，日志=炉火观察孔。
 - **视觉**：深色为主（墨色/玄青底），主色朱砂红（进度/运行），琥珀金（产物/高亮），青瓷青（成功/数据）；衬线标题 + 无衬线正文；克制的光晕与颗粒纹理，避免"游戏化"廉价感。
@@ -317,14 +325,13 @@ ModelFamily
 
 | 里程碑 | 周期 | 内容 | 退出标准 |
 |---|---|---|---|
-| **M0 骨架** | 2 周 | workspace、core 领域模型、SQLite、axum API、Tauri 壳、空 UI 框架、CLI doctor | `danlu doctor` 通过；UI 空壳可启动 |
+| **M0 骨架** | 2 周 | workspace、core 领域模型、SQLite、axum API、Tauri 壳、空 UI 框架、CLI doctor | `tiandi doctor` 通过；UI 空壳可启动 |
 | **M1 首炉** | 4 周 | 数据集导入/缩略图/去重/桶、标签编辑器、丹方系统、兼容引擎跑通 **NoobAI SDXL LoRA** 全流程、采样画廊、药库 v1 | 用 UI 完成一次 NoobAI LoRA 训练并出图（验收标准 §12） |
 | **M2 连烧** | 4 周 | 任务队列、指标曲线、断点续训、Anima（sd-scripts 后端）、Illusion 验证、镜像源、系统通知 | 队列连续跑完 ≥3 个任务；Anima LoRA 训练成功 |
-| **M3 换骨 + Krea2** | 4–8 周 | Rust 数据管线替换、VAE 编码缓存、ONNX 打标器；**Krea 2 兼容后端（ai-toolkit）**与权重/许可调研结论落地 | Krea 2 LoRA 训练成功；兼容引擎消费 Rust 侧缓存训练 |
-| **M4 原生 SDXL** | R&D 8–12 周 | candle 训练循环（SDXL LoRA），与兼容引擎结果对比测试 | 同参原生/兼容产物质量一致 |
-| **M5 原生 DiT** | R&D 12 周+ | Anima → Krea 2 原生训练 | 原生训练通过验收 |
+| **M3 拓炉 + Krea2** | 4–8 周 | **Krea 2 内核（ai-toolkit 后端）**与权重/许可调研结论落地；打标完善（WD14/CL/Florence 经 Python 内核）；自动化 CLI 全流程（`tiandi run recipe.toml`）；大陆镜像与离线缓存 | Krea 2 LoRA 训练成功（许可允许前提下）；CLI 可无人值守跑通全流程 |
+| **远期探索** | 不排期 | 可选：Rust ONNX 打标器、candle 推理/训练（见 §8.4）；GGUF 导出评估 | 不阻塞主线 |
 
-> 注：周期为单人开发估算；M3 起可与 M2 并行部分内容；M4/M5 视 M3 后的技术结论调整。
+> 注：周期为单人开发估算；M3 起可与 M2 并行部分内容。**训练计算内核始终为 Python（IPC/Stdio），Rust 原生训练内核不在主线内（v1.1 决策）。**
 
 ---
 
@@ -332,13 +339,13 @@ ModelFamily
 
 | # | 风险 | 概率 | 影响 | 缓解 |
 |---|---|---|---|---|
-| R1 | **原生训练引擎 R&D 周期不可控**（candle 训练循环需自研） | 高 | 高 | 兼容引擎先行（P0），原生按里程碑渐进替换；原生不阻塞产品可用性 |
+| R1 | Python 内核（sd-scripts / ai-toolkit）版本漂移与多内核维护成本 | 中 | 中 | 锁版本 + 受管 venv + doctor 体检（R4）；内核抽象 `Trainer`/`CompatBackend` 隔离差异；升级显式化 |
 | R2 | **Krea 2 有参考实现（ai-toolkit）但许可/配套待定**：官方权重许可、Qwen3-VL 许可、edit 模式需外部 ComfyUI 节点 | 中 | 中 | M3 前置调研；无法训练则先支持"采样验证"（diffusers 推理），训练列 P2 |
 | R3 | Anima 非商用许可与上游变动 | 低 | 低 | 私人使用合规；锁定上游 commit（lora-scripts-next 做法）；如上游失联，fork 维护 |
 | R4 | Python 依赖漂移（diffusers 按 git 提交钉死 / torch / CUDA 版本） | 中 | 中 | 锁版本 + 受管 venv + doctor 体检；升级显式化；约束文件防 pip 静默降级（参考 ai-toolkit manager 教训） |
 | R5 | Windows 环境差异（驱动/显存/路径/控制台） | 中 | 中 | preflight 体检清单；路径全 Unicode 处理（Rust 天然优势）；一等公民解决原项目的 Windows 补丁问题 |
 | R6 | 单人开发精力分散 | 中 | 中 | 范围克制（非目标清单 §3.1）；P0 只做 SDXL 单模型首跑 |
-| R7 | 采样出图依赖推理实现（SDXL/DiT 均需） | 中 | 中 | M1 采样走兼容引擎（sd-scripts/diffusers）；原生推理（candle）M3 起替代 |
+| R7 | IPC 事件流断线/卡死导致进度失真 | 中 | 中 | JSON Lines 结构化事件 + 心跳超时卡死检测 + 采样图/checkpoint 文件监控兜底（§8.3） |
 | R8 | **许可证边界**：lora-scripts-next 主仓库 AGPL-3.0 | 低 | 中 | clean-room 重写不复制其代码（仅参考设计）；进程级调用 Apache/MIT 运行时不受传染；文档中标注来源 |
 | R9 | **产物互操作**：LoRA 元数据（ss_ 前缀、ss_tag_frequency、training_info）与 keymaps 须字节级兼容 | 中 | 高 | 以 kohya 元数据规范为契约，单测 golden 文件对照；否则 ComfyUI/A1111 无法加载产物 |
 
@@ -348,7 +355,7 @@ ModelFamily
 
 **M1 验收**：在 Windows 11 + NVIDIA GPU 上，从零安装（单安装包）后，用户在 UI 中完成：导入 20+ 张图 → 自动打标 → 选 NoobAI 基底 → 套入门丹方 → 点火 → 观察到进度/损失曲线/采样图 → 开炉产出带元数据与缩略图的 LoRA 文件，且该文件可被外部工具（如 ComfyUI）正常加载。
 
-**全项目验收**：SDXL 族（Illusion/NoobAI）与 DiT 族（Anima；Krea 2 经 ai-toolkit 兼容后端，前提是权重/许可调研通过）均可用统一丹方体系完成训练；任务可排队、可续训；药库可管理全部产物（kohya 元数据兼容，可被 ComfyUI/A1111 加载）；`danlu doctor` 全绿。
+**全项目验收**：SDXL 族（Illusion/NoobAI）与 DiT 族（Anima；Krea 2 经 ai-toolkit 内核，前提是权重/许可调研通过）均可用统一丹方体系完成训练；训练全程经 IPC/Stdio 通信（Rust 编排 + Python 内核）；任务可排队、可续训；药库可管理全部产物（kohya 元数据兼容，可被 ComfyUI/A1111 加载）；`tiandi doctor` 全绿。
 
 ---
 
@@ -389,7 +396,7 @@ ModelFamily
 
 #### A.4 三项目横向结论（直接支撑架构决策）
 
-1. **兼容引擎统一采用"配置文件 + accelerate launch + stdout 解析"模式**（kohya_ss 与 lora-scripts-next 殊途同归），无需自研训练内核即可覆盖 SDXL/Anima；Krea 2 追加 ai-toolkit 后端。
+1. **训练内核统一采用"配置文件 + accelerate launch + stdout 事件"模式**（kohya_ss 与 lora-scripts-next 殊途同归），Rust 侧以 IPC/Stdio 编排（ADR-001），无需自研训练内核即可覆盖 SDXL/Anima；Krea 2 追加 ai-toolkit 后端。
 2. **参数面以 kohya_ss 为全集基准**（25 优化器/11 调度器/20 网络结构/缓存/噪声技巧/元数据），以 lora-scripts-next 为 UX 与默认值基准，以 ai-toolkit 为时间步/损失技巧与扩展机制基准。
 3. **产物互操作是硬契约**：kohya 元数据（ss_ 前缀）与 keymaps 必须字节级兼容（R9）。
 4. **三个项目各自的"环境地狱/技术债"论证了 Rust 重写与全新 UI 的必要性**：gradio 硬锁、vendored 无源码前端、巨型函数、任务不持久化、无队列。
@@ -399,11 +406,12 @@ ModelFamily
 | 术语 | 含义 |
 |---|---|
 | 丹方 Recipe | 一组完整训练配置（含网络结构、优化器、调度、采样设置），按模型族校验 |
-| 兼容引擎 | 受管 Python sd-scripts 运行时 + JSON-RPC 桥，保证 P0 可用性 |
-| 原生引擎 | candle 实现的 Rust 训练循环，按里程碑渐进替代兼容引擎 |
+| 计算内核 | Python 训练运行时（sd-scripts / ai-toolkit），以 IPC/Stdio 与 Rust 引擎通信 |
+| 兼容引擎 | Rust 侧对 Python 内核的编排层：`Trainer`/`CompatBackend` trait、进程监督、事件协议 |
+| 远期探索 | 不排期、不承诺的候选能力（Rust ONNX 打标、candle 推理/训练、GGUF 导出） |
 | 桶 bucket | 按长宽比分组的分辨率桶采样（SDXL/DiT 训练标准做法） |
 | 火候 | 训练速度/状态的拟物化表达（文火=暂停，武火=运行，熄火=停止） |
 
 ---
 
-*本文档随审查结论与首轮技术验证更新；v1.0 前不冻结架构决策。*
+*本文档随架构决策更新；v1.1 起架构决策冻结（ADR-001），仅功能与里程碑可迭代。*

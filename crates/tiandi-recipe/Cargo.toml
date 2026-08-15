@@ -1,9 +1,9 @@
 [package]
-name = "danlu-dataset"
+name = "tiandi-recipe"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "数据管线：图像解码/哈希去重/缩略图/分桶/统计（rayon 并行）"
+description = "丹方：schema 校验、内置预设、TOML 读写"
 
 [dependencies]

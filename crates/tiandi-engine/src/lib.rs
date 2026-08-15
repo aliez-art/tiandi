@@ -34,6 +34,10 @@ pub struct TrainJob {
     pub base_model: Option<String>,
     /// 产物名（默认 run_id）
     pub output_name: Option<String>,
+    /// 断点续训：sd-scripts state 目录（None = 从头训练）
+    pub resume_dir: Option<String>,
+    /// 附加环境变量（镜像源等，注入内核进程）
+    pub env: Vec<(String, String)>,
 }
 
 /// 引擎错误。

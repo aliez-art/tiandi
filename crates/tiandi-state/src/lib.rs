@@ -12,7 +12,7 @@ pub use repos::{ImageRecord, RepoError, Store};
 use rusqlite::Connection;
 
 /// 当前 schema 版本（`PRAGMA user_version`）。
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// 打开（或创建）数据库并执行迁移。
 pub fn open(path: &std::path::Path) -> Result<Connection, rusqlite::Error> {
@@ -119,6 +119,18 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute_batch(
             r#"
             ALTER TABLE runs ADD COLUMN base_model_id TEXT;
+            "#,
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
+    if current < 4 {
+        // v4（M2）：设置（镜像源等）
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;

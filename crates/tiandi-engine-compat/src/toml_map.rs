@@ -104,6 +104,9 @@ pub fn build_sdscripts_toml(
     ));
     t.push_str(&format!("output_name = \"{}\"\n", paths.output_name));
     t.push_str("save_model_as = \"safetensors\"\n");
+    if let Some(resume) = &paths.resume {
+        t.push_str(&format!("resume = \"{}\"\n", resume.replace('\\', "/")));
+    }
     if let Some(tw) = &recipe.trigger_word {
         t.push_str(&format!("trigger_word = \"{tw}\"\n"));
     }
@@ -156,6 +159,8 @@ pub struct TrainPaths {
     pub output_dir: String,
     pub output_name: String,
     pub logging_dir: String,
+    /// 断点续训（sd-scripts state 目录，可选）
+    pub resume: Option<String>,
 }
 
 /// 预热步数：按总步数比例换算（M1 估算：epochs × 1000 步/轮基准）。
@@ -209,7 +214,20 @@ mod tests {
             output_dir: r"D:\runs\r1".into(),
             output_name: "noobai-lora".into(),
             logging_dir: r"D:\runs\r1\logs".into(),
+            resume: None,
         }
+    }
+
+    #[test]
+    fn resume_is_emitted_when_present() {
+        let recipe = RecipeData::default();
+        let mut paths = paths();
+        paths.resume = Some(r"D:\runs\r1\checkpoints\noobai-lora-000010.state".into());
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths);
+        assert!(
+            toml.contains("resume = \"D:/runs/r1/checkpoints/noobai-lora-000010.state\""),
+            "{toml}"
+        );
     }
 
     #[test]

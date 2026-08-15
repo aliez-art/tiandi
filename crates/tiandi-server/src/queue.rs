@@ -112,6 +112,21 @@ pub async fn build_job(
     }
 
     let runs_dir = state.trainer.runs_dir();
+    // 断点续训：checkpoints 下最新 *.state 目录（sd-scripts save_state 产物）
+    let resume_dir = detect_resume_dir(&runs_dir.join(&run.id));
+    // 设置注入：镜像源等（HF_ENDPOINT 等环境变量传给内核）
+    let mut env: Vec<(String, String)> = Vec::new();
+    {
+        let store = state.store.lock().await;
+        let settings = store.list_settings().unwrap_or_default();
+        for (k, v) in settings {
+            if k == "hf_endpoint" {
+                env.push(("HF_ENDPOINT".into(), v));
+            } else if k == "pip_index" {
+                env.push(("PIP_INDEX_URL".into(), v));
+            }
+        }
+    }
     Ok(tiandi_engine::TrainJob {
         run_id: run.id.clone(),
         recipe_path: recipe_id.unwrap_or_default(),
@@ -121,7 +136,47 @@ pub async fn build_job(
         family,
         base_model,
         output_name,
+        resume_dir,
+        env,
     })
+}
+
+/// 探测最新 sd-scripts state 目录（`<name>-<step>.state`）。
+/// 时间戳取目录内最新文件 mtime（Windows 目录 mtime 更新不可靠）。
+fn detect_resume_dir(run_dir: &std::path::Path) -> Option<String> {
+    let ckpts = run_dir.join("checkpoints");
+    let entries = std::fs::read_dir(&ckpts).ok()?;
+    let mut best: Option<(std::time::SystemTime, String)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !path.is_dir() || !name.ends_with(".state") {
+            continue;
+        }
+        if let Some(mtime) = dir_latest_mtime(&path) {
+            if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                best = Some((mtime, path.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// 目录内最新文件 mtime（递归）。
+fn dir_latest_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut latest: Option<std::time::SystemTime> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let meta = entry.metadata().ok()?;
+        let t = if meta.is_dir() {
+            dir_latest_mtime(&entry.path())?
+        } else {
+            meta.modified().ok()?
+        };
+        if latest.is_none_or(|l| t > l) {
+            latest = Some(t);
+        }
+    }
+    latest
 }
 
 /// 任务失败落库 + 事件。
@@ -177,5 +232,40 @@ async fn recover_interrupted(state: &AppState) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_detects_latest_state_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run1");
+        let ckpts = run_dir.join("checkpoints");
+        std::fs::create_dir_all(&ckpts).unwrap();
+        // 两个 state 目录 + 一个普通文件
+        std::fs::create_dir(ckpts.join("lora-000001.state")).unwrap();
+        std::fs::create_dir(ckpts.join("lora-000010.state")).unwrap();
+        std::fs::write(ckpts.join("lora.safetensors"), b"x").unwrap();
+        // 让第二个更新的 mtime 生效（mtime 精度问题：强制设置）
+        let newer = ckpts.join("lora-000010.state");
+        std::fs::write(newer.join("placeholder"), b"y").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let found = detect_resume_dir(&run_dir).unwrap();
+        assert!(
+            found.ends_with("lora-000010.state"),
+            "应探测到最新的 state 目录：{found}"
+        );
+    }
+
+    #[test]
+    fn resume_none_when_no_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run_dir = tmp.path().join("run2");
+        std::fs::create_dir_all(run_dir.join("checkpoints")).unwrap();
+        assert!(detect_resume_dir(&run_dir).is_none());
     }
 }

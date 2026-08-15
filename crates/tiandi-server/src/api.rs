@@ -4,6 +4,7 @@ pub mod captions;
 pub mod datasets;
 pub mod models;
 pub mod recipes;
+pub mod system;
 pub mod vault;
 
 use axum::{
@@ -73,6 +74,7 @@ pub fn router(state: AppState) -> Router {
         .merge(datasets::routes())
         .merge(captions::routes())
         .merge(models::routes())
+        .merge(system::routes())
         .merge(recipes::routes())
         .merge(vault::routes())
         .with_state(api_state)

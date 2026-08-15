@@ -92,13 +92,14 @@ impl SdScriptsTrainer {
                     .unwrap_or_else(|| job.run_id.clone())
                     .to_string(),
                 logging_dir: logs_dir.to_string_lossy().into_owned(),
+                resume: job.resume_dir.clone(),
             };
             let toml = build_sdscripts_toml(&recipe, job.family, &paths);
             std::fs::write(&config_path, toml)
                 .map_err(|e| EngineError::Spawn(format!("写训练配置失败：{e}")))?;
         }
 
-        // 环境变量：run_id 供事件归属；sample 目录供 mock 出图
+        // 环境变量：run_id 供事件归属；sample 目录供 mock 出图；设置注入（镜像源等）
         let mut env = vec![
             ("TIANDI_RUN_ID".to_string(), job.run_id.clone()),
             (
@@ -106,6 +107,7 @@ impl SdScriptsTrainer {
                 samples_dir.to_string_lossy().into_owned(),
             ),
         ];
+        env.extend(job.env.iter().cloned());
         if mode == KernelMode::Mock {
             env.push(("TIANDI_MOCK_TOTAL".into(), "60".into()));
             env.push(("TIANDI_MOCK_INTERVAL".into(), "0.15".into()));

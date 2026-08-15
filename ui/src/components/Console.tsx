@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   assetUrl,
+  cancelRun,
   deleteCheckpoint,
   listCheckpoints,
   renameCheckpoint,
   runLogs,
   runMetrics,
+  startRun,
   type Checkpoint,
   type MetricPoint,
   type Run,
@@ -172,6 +174,29 @@ export default function Console({ run, events }: ConsoleProps) {
     setRenameValue('')
   }
 
+  const [opError, setOpError] = useState<string | null>(null)
+
+  const onResume = async () => {
+    setOpError(null)
+    try {
+      await startRun(run.id)
+      window.setTimeout(() => window.location.reload(), 300)
+    } catch (e) {
+      setOpError(`续丹失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  const onCancel = async () => {
+    if (!window.confirm('确定取消当前任务？')) return
+    setOpError(null)
+    try {
+      await cancelRun(run.id)
+      window.setTimeout(() => window.location.reload(), 300)
+    } catch (e) {
+      setOpError(`取消失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   return (
     <div className="console">
       {/* 火候仪表盘 */}
@@ -199,6 +224,17 @@ export default function Console({ run, events }: ConsoleProps) {
             <span className="gauge-label">创建于</span>
             <span>{new Date(run.created_at).toLocaleString()}</span>
           </div>
+          {(run.state === 'failed' || run.state === 'running' || run.state === 'queued') && (
+            <div className="gauge-row actions">
+              {run.state === 'failed' && (
+                <button onClick={onResume}>续丹（重试/断点续训）</button>
+              )}
+              {(run.state === 'running' || run.state === 'queued') && (
+                <button className="danger" onClick={onCancel}>熄灭（取消）</button>
+              )}
+            </div>
+          )}
+          {opError && <p className="status-line">{opError}</p>}
         </div>
       </section>
 

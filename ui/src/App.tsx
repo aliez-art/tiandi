@@ -3,13 +3,16 @@ import {
   createSimulatedRun,
   discoverBase,
   fetchHealth,
+  fetchSystem,
   listRuns,
   subscribeEvents,
   type Health,
   type Run,
+  type SystemInfo,
 } from './api'
 import Console, { type EventLine } from './components/Console'
 import DatasetView from './components/DatasetView'
+import SettingsView from './components/SettingsView'
 
 const STATE_LABEL: Record<string, string> = {
   created: '已创建',
@@ -27,12 +30,31 @@ const STATE_LABEL: Record<string, string> = {
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [connecting, setConnecting] = useState(true)
-  const [tab, setTab] = useState<'train' | 'dataset'>('train')
+  const [system, setSystem] = useState<SystemInfo | null>(null)
+  const [tab, setTab] = useState<'train' | 'dataset' | 'settings'>('train')
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const eventSeq = useRef(0)
+
+  // GPU 监控（3s 轮询）
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const s = await fetchSystem()
+        if (!cancelled) setSystem(s)
+      } catch {
+        /* 服务未就绪时静默 */
+      }
+      if (!cancelled) window.setTimeout(tick, 3000)
+    }
+    void tick()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -126,8 +148,21 @@ export default function App() {
           >
             药材
           </button>
+          <button
+            className={`tab ${tab === 'settings' ? 'active' : ''}`}
+            onClick={() => setTab('settings')}
+          >
+            炉房
+          </button>
         </nav>
         <div className="status">
+          {system?.gpu && (
+            <span className="gpu" title={system.gpu.name}>
+              GPU {system.gpu.util_percent}% ·{' '}
+              {(system.gpu.mem_used_mb / 1024).toFixed(1)}/
+              {(system.gpu.mem_total_mb / 1024).toFixed(0)}GB
+            </span>
+          )}
           {connecting ? (
             <span className="connecting">◌ 正在点火…</span>
           ) : health ? (
@@ -184,6 +219,10 @@ export default function App() {
               </div>
             )}
           </section>
+        </main>
+      ) : tab === 'settings' ? (
+        <main className="layout-single">
+          <SettingsView />
         </main>
       ) : (
         <main className="layout-single">

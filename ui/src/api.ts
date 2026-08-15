@@ -255,3 +255,42 @@ export async function registerModel(input: {
   if (!res.ok) throw new Error(`register model ${res.status}`)
   return res.json()
 }
+
+export interface SystemInfo {
+  gpu: { name: string; mem_used_mb: number; mem_total_mb: number; util_percent: number } | null
+  server_time: string
+}
+
+export async function fetchSystem(): Promise<SystemInfo> {
+  const res = await fetch(`${base()}/api/system`)
+  if (!res.ok) throw new Error(`system ${res.status}`)
+  return res.json()
+}
+
+export async function fetchSettings(): Promise<Record<string, string>> {
+  const res = await fetch(`${base()}/api/settings`)
+  if (!res.ok) throw new Error(`settings ${res.status}`)
+  return res.json()
+}
+
+export async function updateSettings(values: Record<string, string>): Promise<Record<string, string>> {
+  const res = await fetch(`${base()}/api/settings`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ values }),
+  })
+  if (!res.ok) throw new Error(`settings ${res.status}`)
+  return res.json()
+}
+
+export async function startRun(runId: string): Promise<Run> {
+  const res = await fetch(`${base()}/api/runs/${runId}/start`, { method: 'POST' })
+  if (!res.ok) throw new Error(`start run ${res.status}`)
+  return res.json()
+}
+
+export async function cancelRun(runId: string): Promise<Run> {
+  const res = await fetch(`${base()}/api/runs/${runId}/cancel`, { method: 'POST' })
+  if (!res.ok) throw new Error(`cancel run ${res.status}`)
+  return res.json()
+}

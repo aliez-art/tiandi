@@ -115,13 +115,14 @@ pub fn cmd_kernel_install(workspace: &Path, torch_index: &str) {
     )
     .expect("锁定 sd-scripts commit 失败");
 
-    // 5. 依赖
+    // 5. 依赖（cwd = sd-scripts，`-e .` 相对依赖从该目录解析）
     println!("\n[5/6] 安装 sd-scripts 依赖…");
     let req = sd_scripts.join("requirements.txt");
     if !req.exists() {
         println!("⚠ 未找到 requirements.txt，跳过依赖安装（后续可手动 pip install -r）");
     } else {
-        run(
+        run_in(
+            sd_scripts.as_path(),
             &[
                 venv_python.to_str().unwrap(),
                 "-m",
@@ -192,11 +193,16 @@ fn venv_python_path(venv: &Path) -> PathBuf {
 }
 
 fn run(args: &[&str], label: Option<&str>) -> Result<(), ()> {
+    run_in(&std::env::current_dir().unwrap_or_default(), args, label)
+}
+
+/// 在指定目录执行命令（`-e .` 之类的相对依赖从该目录解析）。
+fn run_in(dir: &Path, args: &[&str], label: Option<&str>) -> Result<(), ()> {
     if let Some(l) = label {
         println!("  {l}");
     }
     let mut cmd = Command::new(args[0]);
-    cmd.args(&args[1..]);
+    cmd.args(&args[1..]).current_dir(dir);
     let mut child = cmd
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())

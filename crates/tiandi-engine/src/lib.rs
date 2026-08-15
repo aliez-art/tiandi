@@ -6,7 +6,7 @@
 //! - 远期探索：`tiandi-engine-native`（candle，不排期）
 
 use serde::Serialize;
-use tiandi_core::RunState;
+use tiandi_core::{ModelFamily, RunState};
 
 /// 引擎能力声明（IPC `hello` 事件语义：版本/能力协商）。
 #[derive(Debug, Clone, Serialize)]
@@ -20,13 +20,20 @@ pub struct EngineInfo {
 #[derive(Debug, Clone)]
 pub struct TrainJob {
     pub run_id: String,
-    /// 丹方文件路径（compat 后端据此展开为内核配置 TOML/YAML）
+    /// 丹方文件路径（compat 后端据此展开为内核配置 TOML/YAML；空 = mock 模式）
     pub recipe_path: String,
     /// 数据集目录（`N_` 重复子集约定）
     pub dataset_dir: String,
     /// 任务输出目录（runs/<run_id>）
     pub output_dir: String,
+    /// 丹方参数（RecipeData 的 JSON；mock 模式为 null）
     pub params: serde_json::Value,
+    /// 模型族（内核脚本路由与参数面）
+    pub family: ModelFamily,
+    /// 基底模型路径（真实训练必需）
+    pub base_model: Option<String>,
+    /// 产物名（默认 run_id）
+    pub output_name: Option<String>,
 }
 
 /// 引擎错误。

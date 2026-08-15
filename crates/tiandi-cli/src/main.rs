@@ -122,7 +122,13 @@ async fn cmd_server(dir: &std::path::Path, port: u16, demo: bool, web: bool) {
             std::process::exit(1);
         }
     };
-    let state = AppState::new(store, tiandi_core::EventBus::default(), demo);
+    let state = AppState::new(
+        store,
+        tiandi_core::EventBus::default(),
+        root.join("runs"),
+        tiandi_server::default_wrapper_path(),
+        demo,
+    );
     let config = ServerConfig {
         host: "127.0.0.1".into(),
         port,

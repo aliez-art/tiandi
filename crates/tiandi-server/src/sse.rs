@@ -17,8 +17,8 @@ use crate::AppState;
 /// 取事件所属 run_id（无 run 归属的事件返回 None）。
 pub fn event_run_id(ev: &Event) -> Option<&str> {
     match ev {
-        Event::Hello { .. } => None,
-        Event::Progress { run_id, .. }
+        Event::Hello { run_id, .. }
+        | Event::Progress { run_id, .. }
         | Event::Log { run_id, .. }
         | Event::Sample { run_id, .. }
         | Event::Metric { run_id, .. }

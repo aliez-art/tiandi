@@ -1,16 +1,20 @@
 //! 本地服务：axum REST + SSE 事件流。
 //!
-//! M0 骨架：健康检查、项目/任务 CRUD、任务状态机流转、SSE 事件流（含模拟训练演示）。
+//! M0 骨架：健康检查、项目/任务 CRUD、任务状态机流转、SSE 事件流。
+//! M1：训练启动链路（POST /api/runs/{id}/start → compat 引擎 → IPC 事件 → supervisor 状态同步）。
 //! 仅绑定 `127.0.0.1`（PRD §7 安全要求）。
 
 pub mod api;
 pub mod sse;
+pub mod supervisor;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
 use tiandi_core::EventBus;
+use tiandi_engine_compat::SdScriptsTrainer;
 use tiandi_state::Store;
 use tokio::sync::Mutex;
 
@@ -19,17 +23,27 @@ use tokio::sync::Mutex;
 pub struct AppState {
     /// SQLite 连接（单人本地工具，单连接 + 互斥；rusqlite Connection 非 Sync）
     pub store: Arc<Mutex<Store>>,
-    /// 进程内事件总线（SSE 订阅源）
+    /// 进程内事件总线（SSE 订阅源 + supervisor 状态同步）
     pub bus: EventBus,
-    /// 是否启用模拟训练演示（POST /api/runs?simulate=1 自动推进状态机）
+    /// 训练内核编排器（SdScriptsBackend + mock）
+    pub trainer: Arc<SdScriptsTrainer>,
+    /// 是否启用模拟训练演示（POST /api/runs?simulate=1 走 mock 内核）
     pub demo: bool,
 }
 
 impl AppState {
-    pub fn new(store: Store, bus: EventBus, demo: bool) -> Self {
+    pub fn new(
+        store: Store,
+        bus: EventBus,
+        runs_dir: PathBuf,
+        wrapper: PathBuf,
+        demo: bool,
+    ) -> Self {
+        let trainer = Arc::new(SdScriptsTrainer::new(bus.clone(), runs_dir, wrapper));
         Self {
             store: Arc::new(Mutex::new(store)),
             bus,
+            trainer,
             demo,
         }
     }
@@ -72,11 +86,19 @@ impl ServerConfig {
     }
 }
 
+/// 内核适配层默认路径（kernel_runner.py，随 crate 分发）。
+pub fn default_wrapper_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../tiandi-engine-compat/assets/kernel_runner.py")
+}
+
 /// 启动服务（阻塞直到 Ctrl-C）。
 ///
 /// 端口占用时自动向后回退尝试（最多 10 个端口），返回实际监听端口；
 /// 全部失败返回最后一次的绑定错误。
 pub async fn serve(state: AppState, config: ServerConfig) -> Result<u16, std::io::Error> {
+    // 任务监督器：内核事件 → 状态机/指标（先于请求服务启动）
+    supervisor::spawn(state.clone());
     let mut last_err = None;
     for offset in 0..10 {
         let port = config.port + offset;

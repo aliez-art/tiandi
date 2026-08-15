@@ -11,8 +11,12 @@ use crate::state::RunState;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    /// 内核握手（IPC §5.2）：版本/能力校验
-    Hello { backend: String, version: String },
+    /// 内核握手（IPC §5.2）：版本/能力校验；run_id 归属用于状态机驱动
+    Hello {
+        run_id: String,
+        backend: String,
+        version: String,
+    },
     /// 训练进度
     Progress {
         run_id: String,

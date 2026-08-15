@@ -4469,6 +4469,20 @@ dependencies = [
 [[package]]
 name = "tiandi-engine-compat"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tiandi-core",
+ "tiandi-engine",
+ "tiandi-recipe",
+ "tiandi-state",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "tiandi-engine-native"
@@ -4498,6 +4512,8 @@ dependencies = [
  "serde_json",
  "tiandi-core",
  "tiandi-dataset",
+ "tiandi-engine",
+ "tiandi-engine-compat",
  "tiandi-recipe",
  "tiandi-state",
  "tokio",

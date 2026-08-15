@@ -21,6 +21,8 @@ tiandi-core = { path = "../tiandi-core" }
 tiandi-state = { path = "../tiandi-state" }
 tiandi-dataset = { path = "../tiandi-dataset" }
 tiandi-recipe = { path = "../tiandi-recipe" }
+tiandi-engine = { path = "../tiandi-engine" }
+tiandi-engine-compat = { path = "../tiandi-engine-compat" }
 
 [dev-dependencies]
 tower = "0.5"

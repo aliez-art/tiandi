@@ -29,7 +29,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let state = AppState::new(store, EventBus::default(), true);
+            let state = AppState::new(
+                store,
+                EventBus::default(),
+                data_dir.join("runs"),
+                tiandi_server::default_wrapper_path(),
+                true,
+            );
 
             // 端口预选：被占用时向后回退（serve 内还有兜底重试）
             let port = pick_free_port(PORT);

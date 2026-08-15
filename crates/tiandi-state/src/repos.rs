@@ -239,6 +239,43 @@ impl Store {
         Ok(())
     }
 
+    pub fn get_recipe(&self, id: &str) -> Result<Recipe, RepoError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, name, family, data, created_at FROM recipes WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| RepoError::NotFound {
+                entity: "recipe",
+                id: id.into(),
+            })?;
+        let (id, name, family, data, created_at) = row;
+        Ok(Recipe {
+            id,
+            name,
+            family: Self::family_from_row(&family)?,
+            data: serde_json::from_str(&data).map_err(|e| {
+                RepoError::Sql(rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                ))
+            })?,
+            created_at,
+        })
+    }
+
     pub fn list_recipes(&self) -> Result<Vec<Recipe>, RepoError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, family, data, created_at FROM recipes ORDER BY created_at",

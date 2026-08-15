@@ -12,6 +12,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tiandi_core::{Event, Project, Run, RunState};
+use tiandi_engine::Trainer as _;
 use tracing::warn;
 
 use crate::{sse, AppState};
@@ -53,16 +54,14 @@ impl From<tiandi_state::RepoError> for ApiError {
 // ---------- 路由 ----------
 
 pub fn router(state: AppState) -> Router {
-    let api_state = AppState {
-        store: state.store.clone(),
-        bus: state.bus.clone(),
-        demo: state.demo,
-    };
+    let api_state = state.clone();
     Router::new()
         .route("/api/health", get(health))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/runs", get(list_runs).post(create_run))
         .route("/api/runs/{id}", get(get_run))
+        .route("/api/runs/{id}/start", post(start_run))
+        .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/runs/{id}/transition", post(transition_run))
         .route("/api/runs/{id}/metrics", get(list_metrics))
         .route("/api/runs/{id}/events", get(sse::stream_events))
@@ -119,8 +118,7 @@ async fn create_project(
 
 #[derive(Deserialize)]
 struct CreateRunQuery {
-    /// 创建后自动跑一段模拟训练（演示状态机与事件流）
-    /// 创建后自动跑一段模拟训练（演示状态机与事件流）：`?simulate=1`
+    /// 创建后立即点火（走 mock 内核演示 IPC 全链路）：`?simulate=1`
     simulate: Option<u8>,
 }
 
@@ -148,12 +146,123 @@ async fn create_run(
 
     if query.simulate == Some(1) {
         if state.demo {
-            spawn_simulate(state, run.id.clone());
+            // 无丹方的 run → mock 内核（完整 IPC 链路：wrapper → JSON Lines → supervisor）
+            start_run_inner(&state, &run.id, true).await?;
         } else {
             warn!("simulate 被请求但服务未启用 demo 模式");
         }
     }
     Ok((StatusCode::CREATED, Json(run)))
+}
+
+/// `POST /api/runs/{id}/start`：点火。有丹方 → sd-scripts 内核；无丹方 → mock 内核。
+async fn start_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Run>, ApiError> {
+    start_run_inner(&state, &id, false).await?;
+    let store = state.store.lock().await;
+    Ok(Json(store.get_run(&id)?))
+}
+
+async fn start_run_inner(state: &AppState, id: &str, force_mock: bool) -> Result<(), ApiError> {
+    let (recipe_id, dataset_id) = {
+        let store = state.store.lock().await;
+        let run = store.get_run(id)?;
+        if !matches!(run.state, RunState::Created | RunState::Failed) {
+            return Err(ApiError::Conflict(format!(
+                "任务状态 {} 不可点火（需 已创建/炸炉）",
+                run.state.label()
+            )));
+        }
+        (run.recipe_id.clone(), run.dataset_id.clone())
+    };
+
+    // 组装训练任务
+    let mut params = serde_json::Value::Null;
+    let mut family = tiandi_core::ModelFamily::Sdxl1;
+    let mut base_model = None;
+    let mut dataset_dir = String::new();
+    let mut output_name = None;
+
+    if !force_mock {
+        if let Some(rid) = &recipe_id {
+            let store = state.store.lock().await;
+            let recipe = store.get_recipe(rid)?;
+            params = recipe.data.clone();
+            family = recipe.family;
+            output_name = Some(recipe.name);
+        } else {
+            return Err(ApiError::BadRequest(
+                "该任务没有丹方。请先创建丹方并关联（mock 演示请用 ?simulate=1）".into(),
+            ));
+        }
+        if let Some(did) = &dataset_id {
+            let store = state.store.lock().await;
+            let ds = store.get_dataset(did)?;
+            dataset_dir = ds.dir;
+        }
+        let store = state.store.lock().await;
+        if let Ok(list) = store.list_base_models() {
+            if let Some(m) = list.first() {
+                base_model = m.path.clone();
+            }
+        }
+    }
+
+    let runs_dir = state.trainer.runs_dir();
+    let job = tiandi_engine::TrainJob {
+        run_id: id.to_string(),
+        recipe_path: recipe_id.clone().unwrap_or_default(),
+        dataset_dir,
+        output_dir: runs_dir.join(id).to_string_lossy().into_owned(),
+        params,
+        family,
+        base_model,
+        output_name,
+    };
+
+    state
+        .trainer
+        .start(job)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // 内核拉起后置排队（hello 事件到达后由 supervisor 推进到 Preparing）
+    let store = state.store.lock().await;
+    let run = store.get_run(id)?;
+    if run.state.can_transition_to(RunState::Queued) {
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        store.update_run_state(id, RunState::Queued, &updated_at)?;
+        state.bus.emit(Event::RunStateChanged {
+            run_id: id.to_string(),
+            from: run.state,
+            to: RunState::Queued,
+        });
+    }
+    Ok(())
+}
+
+/// `POST /api/runs/{id}/cancel`：取消训练（两段式：优雅请求 → 超时 kill-tree）。
+async fn cancel_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Run>, ApiError> {
+    state
+        .trainer
+        .cancel(&id)
+        .map_err(|e| ApiError::Conflict(format!("取消失败：{e}")))?;
+    let store = state.store.lock().await;
+    let run = store.get_run(&id)?;
+    if !run.state.is_terminal() {
+        let updated_at = chrono::Utc::now().to_rfc3339();
+        store.update_run_state(&id, RunState::Canceled, &updated_at)?;
+        state.bus.emit(Event::RunStateChanged {
+            run_id: id.clone(),
+            from: run.state,
+            to: RunState::Canceled,
+        });
+    }
+    Ok(Json(store.get_run(&id)?))
 }
 
 async fn get_run(
@@ -208,96 +317,6 @@ async fn list_metrics(
     Ok(Json(store.list_metrics(&id)?))
 }
 
-// ---------- 模拟训练（M0 演示） ----------
-
-/// 模拟训练：created → queued → preparing → running → (progress/metric/sample) → saving → done。
-fn spawn_simulate(state: AppState, run_id: String) {
-    tokio::spawn(async move {
-        let ms = |n: u64| tokio::time::sleep(std::time::Duration::from_millis(n));
-
-        transition(&state, &run_id, RunState::Created, RunState::Queued).await;
-        ms(200).await;
-        transition(&state, &run_id, RunState::Queued, RunState::Preparing).await;
-        ms(400).await;
-        transition(&state, &run_id, RunState::Preparing, RunState::Running).await;
-
-        const TOTAL: u64 = 50;
-        for step in 1..=TOTAL {
-            ms(250).await;
-            let loss = 1.0 / (step as f64).sqrt() + 0.05;
-            let lr = 1.0e-4;
-            state.bus.emit(Event::Progress {
-                run_id: run_id.clone(),
-                step,
-                epoch: step as f32 / TOTAL as f32,
-                loss,
-                lr,
-                eta_s: Some((TOTAL - step) * 250 / 1000),
-            });
-            // 指标入库（真实训练中由 core 用例消费内核 Metric 事件落库，模拟任务直接落）
-            {
-                let store = state.store.lock().await;
-                let _ = store.insert_metric(&tiandi_core::MetricPoint {
-                    run_id: run_id.clone(),
-                    step,
-                    loss: Some(loss),
-                    lr: Some(lr),
-                });
-            }
-            state.bus.emit(Event::Metric {
-                run_id: run_id.clone(),
-                step,
-                loss: Some(loss),
-                lr: Some(lr),
-            });
-            if step % 10 == 0 {
-                state.bus.emit(Event::Log {
-                    run_id: run_id.clone(),
-                    level: "info".into(),
-                    msg: format!("采样出图 step {step}（模拟）"),
-                });
-                state.bus.emit(Event::Sample {
-                    run_id: run_id.clone(),
-                    path: format!("runs/{run_id}/samples/step-{step:04}.png"),
-                });
-            }
-        }
-
-        transition(&state, &run_id, RunState::Running, RunState::Saving).await;
-        ms(300).await;
-        transition(&state, &run_id, RunState::Saving, RunState::Done).await;
-        state.bus.emit(Event::Done {
-            run_id: run_id.clone(),
-            code: 0,
-        });
-        state.bus.emit(Event::Log {
-            run_id,
-            level: "info".into(),
-            msg: "模拟炼丹完成：出炉！".into(),
-        });
-    });
-}
-
-/// 状态迁移（幂等：状态不匹配或迁移非法则忽略）。
-async fn transition(state: &AppState, run_id: &str, from: RunState, to: RunState) {
-    let store = state.store.lock().await;
-    let run = match store.get_run(run_id) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    if run.state != from || !run.state.can_transition_to(to) {
-        return;
-    }
-    let updated_at = chrono::Utc::now().to_rfc3339();
-    if store.update_run_state(run_id, to, &updated_at).is_ok() {
-        state.bus.emit(Event::RunStateChanged {
-            run_id: run_id.to_string(),
-            from: run.state,
-            to,
-        });
-    }
-}
-
 // ---------- 测试 ----------
 
 #[cfg(test)]
@@ -316,7 +335,16 @@ mod tests {
             .with_test_writer()
             .try_init();
         let store = Store::open_in_memory().unwrap();
-        AppState::new(store, EventBus::default(), true)
+        let st = AppState::new(
+            store,
+            EventBus::default(),
+            std::env::temp_dir(),
+            crate::default_wrapper_path(),
+            true,
+        );
+        // 监督器：模拟任务的事件需要它推进状态机与入库
+        crate::supervisor::spawn(st.clone());
+        st
     }
 
     #[tokio::test]

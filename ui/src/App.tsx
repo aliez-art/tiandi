@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  base,
   createSimulatedRun,
   discoverBase,
   fetchHealth,
@@ -9,12 +8,7 @@ import {
   type Health,
   type Run,
 } from './api'
-
-interface EventLine {
-  id: number
-  type: string
-  data: string
-}
+import Console, { type EventLine } from './components/Console'
 
 const STATE_LABEL: Record<string, string> = {
   created: '已创建',
@@ -34,12 +28,19 @@ export default function App() {
   const [connecting, setConnecting] = useState(true)
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<EventLine[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const eventSeq = useRef(0)
 
   const refreshRuns = useCallback(async () => {
     try {
-      setRuns(await listRuns())
+      const list = await listRuns()
+      setRuns(list)
+      // 自动选中第一个（若未选）
+      setSelected((prev) => {
+        if (prev && list.some((r) => r.id === prev)) return prev
+        return list[0]?.id ?? null
+      })
     } catch (e) {
       console.error('list runs failed', e)
     }
@@ -77,7 +78,7 @@ export default function App() {
         } catch {
           /* 非 JSON 行按 log 处理 */
         }
-        setEvents((prev) => [...prev.slice(-49), { id: ++eventSeq.current, type, data: line }])
+        setEvents((prev) => [...prev.slice(-499), { id: ++eventSeq.current, type, data: line }])
         void refreshRuns()
       })
     }
@@ -93,7 +94,7 @@ export default function App() {
     setBusy(true)
     try {
       const run = await createSimulatedRun()
-      console.log('simulated run', run.id)
+      setSelected(run.id)
       await refreshRuns()
     } catch (e) {
       console.error('create run failed', e)
@@ -102,64 +103,73 @@ export default function App() {
     }
   }
 
+  const selectedRun = runs.find((r) => r.id === selected) ?? null
+
   return (
     <div className="app">
       <header className="header">
-        <h1>天地熔炉 <span className="sub">Tiandi Furnace</span></h1>
+        <h1>
+          天地熔炉 <span className="sub">Tiandi Furnace</span>
+        </h1>
         <div className="status">
           {connecting ? (
             <span className="connecting">◌ 正在点火…</span>
           ) : health ? (
-            <span className="ok">● 已点火 v{health.version}{health.demo ? '（演示模式）' : ''}</span>
+            <span className="ok">
+              ● 已点火 v{health.version}
+              {health.demo ? '（演示模式）' : ''}
+            </span>
           ) : (
             <span className="err">● 服务未连接</span>
           )}
         </div>
       </header>
 
-      <main>
-        <section className="panel">
+      <main className="layout">
+        {/* 任务列表（丹房） */}
+        <aside className="sidebar">
           <div className="panel-title">
             <h2>炼丹任务</h2>
-            <button onClick={onFire} disabled={busy || connecting}>
-              {busy ? '点火中…' : '点火（模拟炼丹）'}
+            <button onClick={onFire} disabled={busy || connecting} title="创建模拟炼丹任务">
+              {busy ? '点火中…' : '点火'}
             </button>
           </div>
           {runs.length === 0 ? (
-            <p className="hint">还没有任务。点击「点火」创建一个模拟炼丹任务（演示状态机与事件流）。</p>
+            <p className="hint">还没有任务。点击「点火」开始。</p>
           ) : (
             <ul className="runs">
               {runs.map((r) => (
-                <li key={r.id} className={`run ${r.state}`}>
+                <li
+                  key={r.id}
+                  className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
+                  onClick={() => setSelected(r.id)}
+                >
                   <span className="run-id">{r.id.slice(0, 8)}</span>
                   <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
-                  <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>
+                  <span className="run-time">
+                    {new Date(r.created_at).toLocaleTimeString()}
+                  </span>
                 </li>
               ))}
             </ul>
           )}
-        </section>
+        </aside>
 
-        <section className="panel">
-          <h2>炉火观察孔（事件流）</h2>
-          {connecting ? (
-            <p className="hint">等待服务就绪…（自动探测 {base()} 及备用端口）</p>
-          ) : events.length === 0 ? (
-            <p className="hint">SSE 事件流等待中…（{base()}/api/runs/all/events）</p>
+        {/* 训练控制台 / 药库 */}
+        <section className="content">
+          {selectedRun ? (
+            <Console key={selectedRun.id} run={selectedRun} events={events} />
           ) : (
-            <ul className="events">
-              {events.map((e) => (
-                <li key={e.id} className={`ev ${e.type}`}>
-                  <span className="ev-type">{e.type}</span>
-                  <code>{e.data}</code>
-                </li>
-              ))}
-            </ul>
+            <div className="panel">
+              <p className="hint">
+                选择一个任务查看训练控制台；或点击「点火」创建模拟炼丹任务（完整 IPC 链路演示）。
+              </p>
+            </div>
           )}
         </section>
       </main>
 
-      <footer>本地服务 {base()} · 仅绑定 127.0.0.1</footer>
+      <footer>本地服务 127.0.0.1 · 仅绑定本机</footer>
     </div>
   )
 }

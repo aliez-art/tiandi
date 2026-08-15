@@ -1,7 +1,8 @@
-//! REST API：健康检查、项目、炼丹任务 CRUD、状态迁移、指标、数据集、丹方。
+//! REST API：健康检查、项目、炼丹任务 CRUD、状态迁移、指标、数据集、丹方、药库。
 
 pub mod datasets;
 pub mod recipes;
+pub mod vault;
 
 use axum::{
     extract::{Path, Query, State},
@@ -69,6 +70,7 @@ pub fn router(state: AppState) -> Router {
         // 无需单独的静态路由（静态段会让 Path 提取器失败）
         .merge(datasets::routes())
         .merge(recipes::routes())
+        .merge(vault::routes())
         .with_state(api_state)
 }
 

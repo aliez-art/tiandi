@@ -149,6 +149,7 @@ pub fn event_from_kernel(value: &serde_json::Value, run_id: &str) -> Option<Even
         "progress" => Some(Event::Progress {
             run_id: run_id.to_string(),
             step: value.get("step").and_then(|v| v.as_u64()).unwrap_or(0),
+            total: value.get("total").and_then(|v| v.as_u64()),
             epoch: value.get("epoch").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
             loss: value.get("loss").and_then(|v| v.as_f64()).unwrap_or(0.0),
             lr: value.get("lr").and_then(|v| v.as_f64()).unwrap_or(0.0),

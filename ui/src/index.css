@@ -1,4 +1,4 @@
-/* 天地熔炉 · 丹房首页（M0 空壳）—— 深色琉璃质感（PRD §9 设计语言） */
+/* 天地熔炉 · 丹房与训练控制台（M1）—— 深色琉璃质感（PRD §9 设计语言） */
 
 :root {
   --bg: #14151a;
@@ -6,9 +6,9 @@
   --bg-elev: #242733;
   --ink: #e8e6df;
   --ink-dim: #9a978e;
-  --cinnabar: #c0392b;   /* 朱砂红：运行/进度 */
-  --amber: #d4a24e;      /* 琥珀金：产物/高亮 */
-  --celadon: #7fb5a0;    /* 青瓷青：成功/数据 */
+  --cinnabar: #c0392b;
+  --amber: #d4a24e;
+  --celadon: #7fb5a0;
   --line: #33364a;
 }
 
@@ -22,102 +22,196 @@ body {
   font-size: 14px;
 }
 
-.app { max-width: 1080px; margin: 0 auto; padding: 24px 20px 48px; }
+.app { max-width: 1280px; margin: 0 auto; padding: 20px 20px 48px; }
 
 .header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
-  padding-bottom: 14px;
-  margin-bottom: 20px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
 }
 
-.header h1 { margin: 0; font-size: 26px; letter-spacing: 2px; }
-.header .sub { color: var(--ink-dim); font-size: 13px; letter-spacing: 1px; margin-left: 8px; }
+.header h1 { margin: 0; font-size: 24px; letter-spacing: 2px; }
+.header .sub { color: var(--ink-dim); font-size: 12px; letter-spacing: 1px; margin-left: 8px; }
 
 .status .ok { color: var(--celadon); }
 .status .err { color: var(--cinnabar); }
 .status .connecting { color: var(--amber); }
 
-main { display: grid; gap: 20px; }
+.layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
+
+.sidebar { position: sticky; top: 16px; }
 
 .panel {
   background: var(--bg-panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 16px 18px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
 }
 
-.panel-title { display: flex; align-items: center; justify-content: space-between; }
+.panel-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
-h2 { margin: 0 0 12px; font-size: 16px; color: var(--amber); }
+h2 { margin: 0 0 10px; font-size: 15px; color: var(--amber); }
 
 button {
   background: var(--cinnabar);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 8px 18px;
-  font-size: 14px;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
   cursor: pointer;
 }
 button:hover { filter: brightness(1.1); }
 button:disabled { opacity: 0.5; cursor: default; }
+button.danger { background: #7a2a22; }
+button.secondary { background: var(--bg-elev); color: var(--ink); border: 1px solid var(--line); }
 
 .hint { color: var(--ink-dim); }
+
+.mono { font-family: ui-monospace, Consolas, monospace; }
+
+/* ---- 任务列表 ---- */
 
 .runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 
 .run {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
   align-items: center;
   background: var(--bg-elev);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 10px 12px;
   border-left: 3px solid var(--line);
+  cursor: pointer;
+  transition: transform 0.1s;
 }
+.run:hover { transform: translateX(2px); }
+.run.active { border-left-color: var(--amber); background: #2a2d3d; }
 .run.done { border-left-color: var(--celadon); }
 .run.running { border-left-color: var(--cinnabar); }
 .run.failed { border-left-color: var(--cinnabar); filter: brightness(0.85); }
 
 .run-id { font-family: monospace; color: var(--ink-dim); }
 .run-state { color: var(--amber); font-weight: 600; }
-.run-time { margin-left: auto; color: var(--ink-dim); font-size: 12px; }
+.run-time { color: var(--ink-dim); font-size: 11px; }
 
-.events {
+/* ---- 控制台：火候仪表盘 ---- */
+
+.console { display: grid; gap: 16px; }
+
+.gauge { display: flex; gap: 20px; align-items: center; }
+
+.gauge-ring {
+  --pct: 0%;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: conic-gradient(var(--cinnabar) var(--pct), var(--bg-elev) 0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.gauge-inner {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.gauge-pct { font-size: 22px; font-weight: 700; color: var(--amber); }
+.gauge-sub { font-size: 11px; color: var(--ink-dim); }
+
+.gauge-info { display: grid; gap: 8px; flex: 1; }
+
+.gauge-row { display: flex; justify-content: space-between; gap: 12px; }
+.gauge-label { color: var(--ink-dim); }
+
+.state-pill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  font-size: 12px;
+}
+.state-pill.running { color: var(--cinnabar); border-color: var(--cinnabar); }
+.state-pill.done { color: var(--celadon); border-color: var(--celadon); }
+.state-pill.failed { color: var(--cinnabar); }
+.state-pill.queued, .state-pill.preparing { color: var(--amber); border-color: var(--amber); }
+
+/* ---- 曲线 ---- */
+
+.curve { width: 100%; height: auto; background: var(--bg-elev); border-radius: 8px; }
+
+/* ---- 采样画廊 / 药库 ---- */
+
+.gallery {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
-  max-height: 380px;
-  overflow-y: auto;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
 }
 
-.ev {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 10px;
-  align-items: baseline;
+.gallery-item {
   background: var(--bg-elev);
-  border-radius: 6px;
-  padding: 6px 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.ev-type { font-size: 12px; color: var(--ink-dim); }
-.ev.progress .ev-type { color: var(--cinnabar); }
-.ev.run_state_changed .ev-type { color: var(--amber); }
-.ev.sample .ev-type { color: var(--celadon); }
+.gallery-item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
 
-.ev code {
+.file-tile {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-linear-gradient(45deg, #242733, #242733 8px, #1c1e26 8px, #1c1e26 16px);
+  color: var(--ink-dim);
+  font-size: 12px;
+  word-break: break-all;
+  padding: 8px;
+}
+
+.gallery-meta { padding: 8px 10px; display: grid; gap: 6px; }
+.gallery-meta code { font-size: 11px; color: var(--ink-dim); word-break: break-all; }
+.gallery-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.gallery-actions input {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  min-width: 90px;
+}
+
+/* ---- 日志 ---- */
+
+.logbox {
+  background: var(--bg-elev);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow-y: auto;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px;
-  color: var(--ink);
-  word-break: break-all;
-  white-space: pre-wrap;
 }
+
+.logline { color: var(--ink); line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
 
 footer {
   margin-top: 28px;

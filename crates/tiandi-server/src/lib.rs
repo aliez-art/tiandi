@@ -53,7 +53,13 @@ impl AppState {
 pub fn build_router(state: AppState) -> Router {
     // 本地单用户工具：WebView（tauri://localhost）与纯浏览器模式均需跨源访问，
     // 且服务只绑 127.0.0.1，permissive CORS 无风险（PRD §7 安全要求）。
-    api::router(state).layer(tower_http::cors::CorsLayer::permissive())
+    // 非 API 路径 → runs 静态文件（采样图等产物）。
+    let runs_dir = state.trainer.runs_dir().to_path_buf();
+    let serve_runs =
+        tower_http::services::ServeDir::new(&runs_dir).append_index_html_on_directories(false);
+    api::router(state)
+        .layer(tower_http::cors::CorsLayer::permissive())
+        .fallback_service(serve_runs)
 }
 
 /// 服务器配置。

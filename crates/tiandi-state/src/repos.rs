@@ -431,6 +431,71 @@ impl Store {
         Ok(())
     }
 
+    pub fn get_checkpoint(&self, id: &str) -> Result<Checkpoint, RepoError> {
+        self.conn
+            .query_row(
+                "SELECT id, run_id, kind, path, created_at FROM checkpoints WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(Checkpoint {
+                        id: row.get(0)?,
+                        run_id: row.get(1)?,
+                        kind: row.get(2)?,
+                        path: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| RepoError::NotFound {
+                entity: "checkpoint",
+                id: id.into(),
+            })
+    }
+
+    pub fn delete_checkpoint(&self, id: &str) -> Result<(), RepoError> {
+        let n = self
+            .conn
+            .execute("DELETE FROM checkpoints WHERE id = ?1", [id])?;
+        if n == 0 {
+            return Err(RepoError::NotFound {
+                entity: "checkpoint",
+                id: id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn update_checkpoint_path(&self, id: &str, path: &str) -> Result<(), RepoError> {
+        let n = self.conn.execute(
+            "UPDATE checkpoints SET path = ?1 WHERE id = ?2",
+            params![path, id],
+        )?;
+        if n == 0 {
+            return Err(RepoError::NotFound {
+                entity: "checkpoint",
+                id: id.into(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn list_all_checkpoints(&self) -> Result<Vec<Checkpoint>, RepoError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, kind, path, created_at FROM checkpoints ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Checkpoint {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                kind: row.get(2)?,
+                path: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn list_checkpoints(&self, run_id: &str) -> Result<Vec<Checkpoint>, RepoError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, run_id, kind, path, created_at FROM checkpoints WHERE run_id = ?1 ORDER BY created_at",

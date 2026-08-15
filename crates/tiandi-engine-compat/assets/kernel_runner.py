@@ -68,6 +68,7 @@ def run_mock(config_path: str) -> None:
             "type": "progress",
             "run_id": os.environ.get("TIANDI_RUN_ID", ""),
             "step": step,
+            "total": total,
             "epoch": step / total,
             "loss": round(loss, 6),
             "lr": lr,

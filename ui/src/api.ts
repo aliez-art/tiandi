@@ -21,6 +21,26 @@ export interface Run {
   updated_at: string
 }
 
+export interface Checkpoint {
+  id: string
+  run_id: string
+  kind: string
+  path: string
+  created_at: string
+}
+
+export interface MetricPoint {
+  run_id: string
+  step: number
+  loss: number | null
+  lr: number | null
+}
+
+/** 采样图/产物 URL（runs 静态服务）。 */
+export function assetUrl(path: string): string {
+  return `${base()}/${path}`
+}
+
 let apiBase: string | null = null
 
 export function base(): string {
@@ -78,4 +98,37 @@ export function subscribeEvents(onEvent: (line: string) => void): EventSource {
   const es = new EventSource(`${base()}/api/runs/all/events`)
   es.onmessage = (e) => onEvent(e.data as string)
   return es
+}
+
+export async function listCheckpoints(runId: string): Promise<Checkpoint[]> {
+  const res = await fetch(`${base()}/api/runs/${runId}/checkpoints`)
+  if (!res.ok) throw new Error(`checkpoints ${res.status}`)
+  return res.json()
+}
+
+export async function deleteCheckpoint(id: string): Promise<void> {
+  const res = await fetch(`${base()}/api/checkpoints/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`delete checkpoint ${res.status}`)
+}
+
+export async function renameCheckpoint(id: string, name: string): Promise<Checkpoint> {
+  const res = await fetch(`${base()}/api/checkpoints/${id}/rename`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) throw new Error(`rename checkpoint ${res.status}`)
+  return res.json()
+}
+
+export async function runMetrics(runId: string): Promise<MetricPoint[]> {
+  const res = await fetch(`${base()}/api/runs/${runId}/metrics`)
+  if (!res.ok) throw new Error(`metrics ${res.status}`)
+  return res.json()
+}
+
+export async function runLogs(runId: string): Promise<string[]> {
+  const res = await fetch(`${base()}/api/runs/${runId}/logs`)
+  if (!res.ok) throw new Error(`logs ${res.status}`)
+  return res.json()
 }

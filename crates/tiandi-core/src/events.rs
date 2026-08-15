@@ -21,6 +21,8 @@ pub enum Event {
     Progress {
         run_id: String,
         step: u64,
+        /// 总步数（未知时为 None；进度条用）
+        total: Option<u64>,
         epoch: f32,
         loss: f64,
         lr: f64,
@@ -95,6 +97,7 @@ mod tests {
         let ev = Event::Progress {
             run_id: "r1".into(),
             step: 42,
+            total: Some(100),
             epoch: 0.5,
             loss: 0.123,
             lr: 1e-4,
@@ -104,6 +107,7 @@ mod tests {
         assert_eq!(v["type"], "progress");
         assert_eq!(v["run_id"], "r1");
         assert_eq!(v["step"], 42);
+        assert_eq!(v["total"], 100);
     }
 
     #[tokio::test]

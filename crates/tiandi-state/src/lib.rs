@@ -12,7 +12,7 @@ pub use repos::{ImageRecord, RepoError, Store};
 use rusqlite::Connection;
 
 /// 当前 schema 版本（`PRAGMA user_version`）。
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// 打开（或创建）数据库并执行迁移。
 pub fn open(path: &std::path::Path) -> Result<Connection, rusqlite::Error> {
@@ -110,6 +110,15 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
                 created_at   TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_image_files_dataset ON image_files(dataset_id);
+            "#,
+        )?;
+        conn.pragma_update(None, "user_version", 2)?;
+    }
+    if current < 3 {
+        // v3（M2）：任务关联基底模型
+        conn.execute_batch(
+            r#"
+            ALTER TABLE runs ADD COLUMN base_model_id TEXT;
             "#,
         )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;

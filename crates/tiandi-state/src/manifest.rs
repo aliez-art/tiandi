@@ -65,7 +65,12 @@ mod tests {
     #[test]
     fn manifest_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
-        let run = Run::new(Some("p1".into()), Some("d1".into()), Some("r1".into()));
+        let run = Run::new(
+            Some("p1".into()),
+            Some("d1".into()),
+            Some("r1".into()),
+            None,
+        );
         let m = RunManifest::from_run(&run, serde_json::json!({"lr": 1e-4}));
         let path = tmp.path().join("manifest.json");
         m.write_to(&path).unwrap();
@@ -79,7 +84,7 @@ mod tests {
     #[test]
     fn manifest_write_is_atomic_no_tmp_leftover() {
         let tmp = tempfile::tempdir().unwrap();
-        let run = Run::new(None, None, None);
+        let run = Run::new(None, None, None, None);
         let m = RunManifest::from_run(&run, serde_json::Value::Null);
         let path = tmp.path().join("manifest.json");
         m.write_to(&path).unwrap();

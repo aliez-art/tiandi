@@ -2,6 +2,7 @@
 
 pub mod captions;
 pub mod datasets;
+pub mod models;
 pub mod recipes;
 pub mod vault;
 
@@ -71,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         // 无需单独的静态路由（静态段会让 Path 提取器失败）
         .merge(datasets::routes())
         .merge(captions::routes())
+        .merge(models::routes())
         .merge(recipes::routes())
         .merge(vault::routes())
         .with_state(api_state)
@@ -131,6 +133,7 @@ struct NewRun {
     project_id: Option<String>,
     dataset_id: Option<String>,
     recipe_id: Option<String>,
+    base_model_id: Option<String>,
 }
 
 async fn list_runs(State(state): State<AppState>) -> Result<Json<Vec<Run>>, ApiError> {
@@ -143,15 +146,20 @@ async fn create_run(
     Query(query): Query<CreateRunQuery>,
     Json(input): Json<NewRun>,
 ) -> Result<(StatusCode, Json<Run>), ApiError> {
-    let run = Run::new(input.project_id, input.dataset_id, input.recipe_id);
+    let run = Run::new(
+        input.project_id,
+        input.dataset_id,
+        input.recipe_id,
+        input.base_model_id,
+    );
     let store = state.store.lock().await;
     store.insert_run(&run)?;
     drop(store);
 
     if query.simulate == Some(1) {
         if state.demo {
-            // 无丹方的 run → mock 内核（完整 IPC 链路：wrapper → JSON Lines → supervisor）
-            start_run_inner(&state, &run.id, true).await?;
+            // 入队（scheduler 自动拉起 mock 内核，完整 IPC 链路）
+            enqueue_run(&state, &run.id).await?;
         } else {
             warn!("simulate 被请求但服务未启用 demo 模式");
         }
@@ -159,90 +167,33 @@ async fn create_run(
     Ok((StatusCode::CREATED, Json(run)))
 }
 
-/// `POST /api/runs/{id}/start`：点火。有丹方 → sd-scripts 内核；无丹方 → mock 内核。
+/// `POST /api/runs/{id}/start`：入队。scheduler 串行拉起（有丹方 → sd-scripts；无 → mock）。
 async fn start_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Run>, ApiError> {
-    start_run_inner(&state, &id, false).await?;
+    enqueue_run(&state, &id).await?;
     let store = state.store.lock().await;
     Ok(Json(store.get_run(&id)?))
 }
 
-async fn start_run_inner(state: &AppState, id: &str, force_mock: bool) -> Result<(), ApiError> {
-    let (recipe_id, dataset_id) = {
-        let store = state.store.lock().await;
-        let run = store.get_run(id)?;
-        if !matches!(run.state, RunState::Created | RunState::Failed) {
-            return Err(ApiError::Conflict(format!(
-                "任务状态 {} 不可点火（需 已创建/炸炉）",
-                run.state.label()
-            )));
-        }
-        (run.recipe_id.clone(), run.dataset_id.clone())
-    };
-
-    // 组装训练任务
-    let mut params = serde_json::Value::Null;
-    let mut family = tiandi_core::ModelFamily::Sdxl1;
-    let mut base_model = None;
-    let mut dataset_dir = String::new();
-    let mut output_name = None;
-
-    if !force_mock {
-        if let Some(rid) = &recipe_id {
-            let store = state.store.lock().await;
-            let recipe = store.get_recipe(rid)?;
-            params = recipe.data.clone();
-            family = recipe.family;
-            output_name = Some(recipe.name);
-        } else {
-            return Err(ApiError::BadRequest(
-                "该任务没有丹方。请先创建丹方并关联（mock 演示请用 ?simulate=1）".into(),
-            ));
-        }
-        if let Some(did) = &dataset_id {
-            let store = state.store.lock().await;
-            let ds = store.get_dataset(did)?;
-            dataset_dir = ds.dir;
-        }
-        let store = state.store.lock().await;
-        if let Ok(list) = store.list_base_models() {
-            if let Some(m) = list.first() {
-                base_model = m.path.clone();
-            }
-        }
-    }
-
-    let runs_dir = state.trainer.runs_dir();
-    let job = tiandi_engine::TrainJob {
-        run_id: id.to_string(),
-        recipe_path: recipe_id.clone().unwrap_or_default(),
-        dataset_dir,
-        output_dir: runs_dir.join(id).to_string_lossy().into_owned(),
-        params,
-        family,
-        base_model,
-        output_name,
-    };
-
-    state
-        .trainer
-        .start(job)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    // 内核拉起后置排队（hello 事件到达后由 supervisor 推进到 Preparing）
+/// 入队：Created/Failed → Queued（scheduler 负责拉起）。
+async fn enqueue_run(state: &AppState, id: &str) -> Result<(), ApiError> {
     let store = state.store.lock().await;
     let run = store.get_run(id)?;
-    if run.state.can_transition_to(RunState::Queued) {
-        let updated_at = chrono::Utc::now().to_rfc3339();
-        store.update_run_state(id, RunState::Queued, &updated_at)?;
-        state.bus.emit(Event::RunStateChanged {
-            run_id: id.to_string(),
-            from: run.state,
-            to: RunState::Queued,
-        });
+    if !matches!(run.state, RunState::Created | RunState::Failed) {
+        return Err(ApiError::Conflict(format!(
+            "任务状态 {} 不可入队（需 已创建/炸炉）",
+            run.state.label()
+        )));
     }
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    store.update_run_state(id, RunState::Queued, &updated_at)?;
+    state.bus.emit(Event::RunStateChanged {
+        run_id: id.to_string(),
+        from: run.state,
+        to: RunState::Queued,
+    });
     Ok(())
 }
 
@@ -346,8 +297,9 @@ mod tests {
             crate::default_wrapper_path(),
             true,
         );
-        // 监督器：模拟任务的事件需要它推进状态机与入库
+        // 监督器（事件→状态机/入库）+ 调度器（串行拉起 Queued 任务）
         crate::supervisor::spawn(st.clone());
+        crate::queue::spawn(st.clone());
         st
     }
 

@@ -80,7 +80,39 @@ pub fn run() {
         }
     }
 
-    // 5. 端口
+    // 5. 训练内核（venv + torch + sd-scripts）
+    let kernel_dir = cwd.join(".kernel");
+    let kernel_json = kernel_dir.join("kernel.json");
+    let kernel_status = if kernel_json.exists() {
+        match std::fs::read_to_string(&kernel_json) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(v) => {
+                    let torch = v.get("torch").and_then(|t| t.as_str()).unwrap_or("?");
+                    let commit = v.get("commit").and_then(|c| c.as_str()).unwrap_or("?");
+                    let venv_py = v.get("python").and_then(|p| p.as_str()).unwrap_or("");
+                    // 探测 CUDA 可用性（短超时）
+                    let cuda = if !venv_py.is_empty() {
+                        std::process::Command::new(venv_py)
+                            .args(["-c", "import torch; print(torch.cuda.is_available())"])
+                            .output()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                            .unwrap_or_else(|_| "未知".into())
+                    } else {
+                        "未知".into()
+                    };
+                    format!("已安装（torch {torch}，commit {commit}，cuda={cuda}）")
+                }
+                Err(_) => "已安装（清单损坏）".into(),
+            },
+            Err(_) => "已安装（清单不可读）".into(),
+        }
+    } else {
+        "未安装（运行 `tiandi kernel install` 引导：venv + torch cu128 + sd-scripts）".into()
+    };
+    let kernel_ok = kernel_status.starts_with("已安装") && kernel_status.contains("cuda=True");
+    warn(kernel_ok, format!("训练内核：{kernel_status}"));
+
+    // 6. 端口
     let port_free = check_port(18765);
     warn(
         port_free,

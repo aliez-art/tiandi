@@ -35,6 +35,22 @@ pub enum RunState {
 
 impl RunState {
     /// 中文标签（UI 展示用，炉火意象）。
+    /// 序列化名（snake_case，与 serde 一致；数据库存储与查询用）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Queued => "queued",
+            Self::Preparing => "preparing",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Sampling => "sampling",
+            Self::Saving => "saving",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::Created => "已创建",

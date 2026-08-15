@@ -5,18 +5,28 @@ import {
   createDataset,
   listCaptions,
   listDatasets,
+  listModels,
+  registerModel,
   runTagging,
   saveCaption,
   scanDataset,
   tagStats,
+  type BaseModel,
   type CaptionEntry,
   type Dataset,
   type TagStat,
 } from '../api'
 
+const FAMILY_LABEL: Record<string, string> = {
+  sdxl1: 'SDXL 1.0',
+  dit_anima: 'Anima (DiT)',
+  dit_krea2: 'Krea 2 (DiT)',
+}
+
 /** 药材视图：数据集管理 + 标签编辑器（PRD §5.2/5.3，FR-201~303）。 */
 export default function DatasetView() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [models, setModels] = useState<BaseModel[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [captions, setCaptions] = useState<CaptionEntry[]>([])
   const [tags, setTags] = useState<TagStat[]>([])
@@ -32,6 +42,10 @@ export default function DatasetView() {
   const [findText, setFindText] = useState('')
   const [replaceText, setReplaceText] = useState('')
   const [useRegex, setUseRegex] = useState(false)
+  // 模型注册表单
+  const [modelName, setModelName] = useState('')
+  const [modelFamily, setModelFamily] = useState('sdxl1')
+  const [modelPath, setModelPath] = useState('')
 
   const refreshDatasets = useCallback(async () => {
     try {
@@ -48,6 +62,7 @@ export default function DatasetView() {
 
   useEffect(() => {
     void refreshDatasets()
+    void listModels().then(setModels).catch(() => {})
   }, [refreshDatasets])
 
   const loadDataset = useCallback(async (id: string) => {
@@ -155,6 +170,26 @@ export default function DatasetView() {
     }
   }
 
+  const onRegisterModel = async () => {
+    if (!modelName || !modelPath) return
+    setBusy(true)
+    try {
+      const m = await registerModel({
+        name: modelName,
+        family: modelFamily,
+        path: modelPath,
+      })
+      setModelName('')
+      setModelPath('')
+      setModels((prev) => [m, ...prev])
+      setStatus(`基底模型已注册：${m.name}`)
+    } catch (e) {
+      setStatus(`注册失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const onPickImage = (path: string) => {
     setSelectedImage(path)
     const cap = captions.find((c) => c.path === path)
@@ -164,6 +199,38 @@ export default function DatasetView() {
 
   return (
     <div className="dataset-view">
+      {/* 基底模型注册 */}
+      <section className="panel">
+        <div className="panel-title">
+          <h2>基底模型</h2>
+        </div>
+        {models.length === 0 ? (
+          <p className="hint">尚未注册基底模型。训练前请注册（如 NoobAI-XL 的 safetensors 路径）。</p>
+        ) : (
+          <ul className="runs datasets">
+            {models.map((m) => (
+              <li key={m.id} className="run">
+                <span className="run-id">{m.name}</span>
+                <span className="run-state">{FAMILY_LABEL[m.family] ?? m.family}</span>
+                <span className="run-time">{m.path}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="create-row">
+          <input placeholder="名称（如 NoobAI-XL）" value={modelName} onChange={(e) => setModelName(e.target.value)} />
+          <select value={modelFamily} onChange={(e) => setModelFamily(e.target.value)}>
+            <option value="sdxl1">SDXL 1.0（NoobAI/Illusion）</option>
+            <option value="dit_anima">Anima (DiT)</option>
+            <option value="dit_krea2">Krea 2 (DiT)</option>
+          </select>
+          <input placeholder="模型路径（safetensors/目录）" value={modelPath} onChange={(e) => setModelPath(e.target.value)} />
+          <button onClick={onRegisterModel} disabled={busy} className="secondary">
+            注册
+          </button>
+        </div>
+      </section>
+
       {/* 数据集列表 + 操作 */}
       <section className="panel">
         <div className="panel-title">

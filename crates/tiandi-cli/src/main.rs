@@ -1,9 +1,8 @@
-//! 命令行入口：`tiandi init | doctor | server`。
-//!
-//! M0 骨架：`doctor` 环境体检（lora-scripts-next preflight 思路的 Rust 版）、
-//! `init` 建工作区、`server` 点火本地服务。
+//! 命令行入口：`tiandi init | doctor | kernel install | models | server`。
 
 mod doctor;
+mod kernel;
+mod models;
 
 use std::path::PathBuf;
 
@@ -35,8 +34,18 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
-    /// 环境体检：路径/磁盘/CUDA/端口
+    /// 环境体检：路径/磁盘/CUDA/端口/内核
     Doctor,
+    /// 训练内核引导：venv + torch(CUDA) + sd-scripts(锁 commit)
+    Kernel {
+        #[command(subcommand)]
+        command: KernelCommand,
+    },
+    /// 基底模型注册（models add / list / remove）
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
     /// 点火本地服务（仅绑定 127.0.0.1）
     Server {
         /// 数据目录（默认当前目录）
@@ -53,6 +62,44 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum KernelCommand {
+    /// 安装训练内核（venv + torch cu128 + sd-scripts 锁定 commit）
+    Install {
+        /// 工作区（默认当前目录，内核装在 <workspace>/.kernel）
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// torch wheel 索引（默认 cu128，RTX 50 系 Blackwell 必需）
+        #[arg(long, default_value = "https://download.pytorch.org/whl/cu128")]
+        torch_index: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModelsCommand {
+    /// 注册基底模型
+    Add {
+        /// 工作区（默认当前目录）
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// 模型名称（如 NoobAI-XL）
+        #[arg(long)]
+        name: String,
+        /// 模型族：sdxl1 / dit_anima / dit_krea2
+        #[arg(long)]
+        family: String,
+        /// 模型路径（safetensors 或目录）
+        #[arg(long)]
+        path: String,
+    },
+    /// 列出已注册模型
+    List {
+        /// 工作区（默认当前目录）
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -66,12 +113,45 @@ async fn main() {
     match cli.command {
         Command::Init { dir, name } => cmd_init(&dir, name),
         Command::Doctor => doctor::run(),
+        Command::Kernel {
+            command: KernelCommand::Install { dir, torch_index },
+        } => {
+            let root = resolve_dir(&dir);
+            kernel::cmd_kernel_install(&root, &torch_index);
+        }
+        Command::Models {
+            command:
+                ModelsCommand::Add {
+                    dir,
+                    name,
+                    family,
+                    path,
+                },
+        } => {
+            let root = resolve_dir(&dir);
+            models::cmd_add(&root, &name, &family, &path);
+        }
+        Command::Models {
+            command: ModelsCommand::List { dir },
+        } => {
+            let root = resolve_dir(&dir);
+            models::cmd_list(&root);
+        }
         Command::Server {
             dir,
             port,
             no_demo,
             web,
         } => cmd_server(&dir, port, !no_demo, web).await,
+    }
+}
+
+/// 解析目录参数（"." → 当前目录）。
+fn resolve_dir(dir: &std::path::Path) -> std::path::PathBuf {
+    if dir.as_os_str().is_empty() || dir == std::path::Path::new(".") {
+        std::env::current_dir().expect("读取当前目录")
+    } else {
+        dir.to_path_buf()
     }
 }
 

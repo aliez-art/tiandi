@@ -36,6 +36,15 @@ pub enum RepoError {
     BadFamily(String),
 }
 
+/// 解析 RunState 存储值：兼容新格式（纯 snake_case）与旧格式（JSON 带引号）。
+fn parse_run_state(s: &str) -> RunState {
+    if s.starts_with('"') {
+        serde_json::from_str(s).unwrap_or(RunState::Created)
+    } else {
+        serde_json::from_str(&format!("\"{s}\"")).unwrap_or(RunState::Created)
+    }
+}
+
 /// 数据存储（SQLite 连接 + 各仓储方法）。
 pub struct Store {
     conn: Connection,
@@ -140,6 +149,38 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn get_base_model(&self, id: &str) -> Result<BaseModel, RepoError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, name, family, path, sha256, source, created_at FROM base_models WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| RepoError::NotFound { entity: "base_model", id: id.into() })?;
+        let (id, name, family, path, sha256, source, created_at) = row;
+        Ok(BaseModel {
+            id,
+            name,
+            family: Self::family_from_row(&family)?,
+            path,
+            sha256,
+            source,
+            created_at,
+        })
     }
 
     pub fn list_base_models(&self) -> Result<Vec<BaseModel>, RepoError> {
@@ -313,14 +354,15 @@ impl Store {
 
     pub fn insert_run(&self, r: &Run) -> Result<(), RepoError> {
         self.conn.execute(
-            "INSERT INTO runs (id, project_id, dataset_id, recipe_id, state, manifest_path, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO runs (id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 r.id,
                 r.project_id,
                 r.dataset_id,
                 r.recipe_id,
-                serde_json::to_string(&r.state).expect("RunState 可序列化"),
+                r.base_model_id,
+                r.state.as_str(),
                 r.manifest_path,
                 r.created_at,
                 r.updated_at
@@ -332,20 +374,21 @@ impl Store {
     pub fn get_run(&self, id: &str) -> Result<Run, RepoError> {
         self.conn
             .query_row(
-                "SELECT id, project_id, dataset_id, recipe_id, state, manifest_path, created_at, updated_at
+                "SELECT id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at
                  FROM runs WHERE id = ?1",
                 [id],
                 |row| {
-                    let state: String = row.get(4)?;
+                    let state: String = row.get(5)?;
                     Ok(Run {
                         id: row.get(0)?,
                         project_id: row.get(1)?,
                         dataset_id: row.get(2)?,
                         recipe_id: row.get(3)?,
-                        state: serde_json::from_str(&state).expect("RunState 可反序列化"),
-                        manifest_path: row.get(5)?,
-                        created_at: row.get(6)?,
-                        updated_at: row.get(7)?,
+                        base_model_id: row.get(4)?,
+                        state: parse_run_state(&state),
+                        manifest_path: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
                     })
                 },
             )
@@ -355,23 +398,57 @@ impl Store {
 
     pub fn list_runs(&self) -> Result<Vec<Run>, RepoError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, dataset_id, recipe_id, state, manifest_path, created_at, updated_at
+            "SELECT id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at
              FROM runs ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
-            let state: String = row.get(4)?;
+            let state: String = row.get(5)?;
             Ok(Run {
                 id: row.get(0)?,
                 project_id: row.get(1)?,
                 dataset_id: row.get(2)?,
                 recipe_id: row.get(3)?,
-                state: serde_json::from_str(&state).expect("RunState 可反序列化"),
-                manifest_path: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                base_model_id: row.get(4)?,
+                state: parse_run_state(&state),
+                manifest_path: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 排队中的任务（按创建时间升序）。
+    pub fn list_queued_runs(&self) -> Result<Vec<Run>, RepoError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at
+             FROM runs WHERE state = 'queued' ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let state: String = row.get(5)?;
+            Ok(Run {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                dataset_id: row.get(2)?,
+                recipe_id: row.get(3)?,
+                base_model_id: row.get(4)?,
+                state: parse_run_state(&state),
+                manifest_path: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 是否有任务正在运行（Preparing/Running/Sampling/Saving/Paused）。
+    pub fn has_running_run(&self) -> Result<bool, RepoError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM runs WHERE state IN ('preparing','running','sampling','saving','paused')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n > 0)
     }
 
     /// 更新任务状态与 updated_at（事务内）。
@@ -383,11 +460,7 @@ impl Store {
     ) -> Result<(), RepoError> {
         let n = self.conn.execute(
             "UPDATE runs SET state = ?1, updated_at = ?2 WHERE id = ?3",
-            params![
-                serde_json::to_string(&state).expect("RunState 可序列化"),
-                updated_at,
-                id
-            ],
+            params![state.as_str(), updated_at, id],
         )?;
         if n == 0 {
             return Err(RepoError::NotFound {
@@ -628,7 +701,7 @@ mod tests {
     #[test]
     fn run_lifecycle_via_store() {
         let s = store();
-        let r = Run::new(None, None, None);
+        let r = Run::new(None, None, None, None);
         s.insert_run(&r).unwrap();
         let got = s.get_run(&r.id).unwrap();
         assert_eq!(got.state, RunState::Created);

@@ -151,6 +151,8 @@ pub struct Run {
     pub project_id: Option<String>,
     pub dataset_id: Option<String>,
     pub recipe_id: Option<String>,
+    /// 基底模型（v3 起；None = 用第一个注册模型或 mock）
+    pub base_model_id: Option<String>,
     pub state: crate::state::RunState,
     /// 运行清单路径（`runs/<id>/manifest.json`）
     pub manifest_path: Option<String>,
@@ -159,10 +161,12 @@ pub struct Run {
 }
 
 impl Run {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         project_id: Option<String>,
         dataset_id: Option<String>,
         recipe_id: Option<String>,
+        base_model_id: Option<String>,
     ) -> Self {
         let t = now();
         Self {
@@ -170,6 +174,7 @@ impl Run {
             project_id,
             dataset_id,
             recipe_id,
+            base_model_id,
             state: crate::state::RunState::Created,
             manifest_path: None,
             created_at: t.clone(),
@@ -219,7 +224,7 @@ mod tests {
 
     #[test]
     fn run_defaults_to_created() {
-        let r = Run::new(None, None, None);
+        let r = Run::new(None, None, None, None);
         assert_eq!(r.state, crate::state::RunState::Created);
         assert!(r.updated_at >= r.created_at || r.updated_at == r.created_at);
     }

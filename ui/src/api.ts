@@ -224,3 +224,34 @@ export async function runTagging(id: string, mode: string): Promise<{ mode: stri
   if (!res.ok) throw new Error(`tagging ${res.status}`)
   return res.json()
 }
+
+export interface BaseModel {
+  id: string
+  name: string
+  family: string
+  path: string | null
+  sha256: string | null
+  source: string | null
+  created_at: string
+}
+
+export async function listModels(): Promise<BaseModel[]> {
+  const res = await fetch(`${base()}/api/models`)
+  if (!res.ok) throw new Error(`models ${res.status}`)
+  return res.json()
+}
+
+export async function registerModel(input: {
+  name: string
+  family: string
+  path: string
+  source?: string
+}): Promise<BaseModel> {
+  const res = await fetch(`${base()}/api/models`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error(`register model ${res.status}`)
+  return res.json()
+}

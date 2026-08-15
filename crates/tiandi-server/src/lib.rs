@@ -5,6 +5,7 @@
 //! 仅绑定 `127.0.0.1`（PRD §7 安全要求）。
 
 pub mod api;
+pub mod queue;
 pub mod sse;
 pub mod supervisor;
 
@@ -103,8 +104,9 @@ pub fn default_wrapper_path() -> std::path::PathBuf {
 /// 端口占用时自动向后回退尝试（最多 10 个端口），返回实际监听端口；
 /// 全部失败返回最后一次的绑定错误。
 pub async fn serve(state: AppState, config: ServerConfig) -> Result<u16, std::io::Error> {
-    // 任务监督器：内核事件 → 状态机/指标（先于请求服务启动）
+    // 任务监督器（内核事件 → 状态机/指标）+ 队列调度器（串行拉起）
     supervisor::spawn(state.clone());
+    queue::spawn(state.clone());
     let mut last_err = None;
     for offset in 0..10 {
         let port = config.port + offset;

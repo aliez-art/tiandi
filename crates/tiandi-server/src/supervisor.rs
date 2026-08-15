@@ -239,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn hello_and_progress_drive_state_machine() {
         let st = state();
-        let run = Run::new(None, None, None);
+        let run = Run::new(None, None, None, None);
         {
             let s = st.store.lock().await;
             s.insert_run(&run).unwrap();
@@ -286,7 +286,7 @@ mod tests {
     #[tokio::test]
     async fn metric_and_done_are_persisted() {
         let st = state();
-        let run = Run::new(None, None, None);
+        let run = Run::new(None, None, None, None);
         {
             let s = st.store.lock().await;
             s.insert_run(&run).unwrap();
@@ -326,7 +326,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let runs_dir = tmp.path().join("runs");
         let st = state();
-        let run = Run::new(None, None, None);
+        let run = Run::new(None, None, None, None);
         {
             let s = st.store.lock().await;
             s.insert_run(&run).unwrap();

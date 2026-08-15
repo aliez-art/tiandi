@@ -22,10 +22,15 @@
 
 **目标**：用 UI 完整跑通一次 **NoobAI SDXL LoRA** 训练（IPC/Stdio 全链路）。
 
-- [ ] `tiandi-dataset`：导入（文件夹/拖拽/zip）、缩略图（rayon 并行）、感知哈希去重、EXIF、桶分配 + 分布可视化
+**已完成的子项（2026-08）**：
+- [x] `tiandi-dataset`：导入（文件夹扫描）、缩略图（rayon 并行 JPEG）、dHash 感知去重、EXIF、分辨率桶 + 分布统计（12 测试）
+- [x] `tiandi-recipe`：丹方类型化 schema（kohya 兼容枚举名）+ 校验器（范围/族适用性）+ 内置预设 4 个 + TOML 文件格式（12 测试）
+- [x] 数据集 API（创建/扫描/图像/桶分布）+ 丹方 API（CRUD/预设/校验不落库）
+- [x] 冒烟：4 图扫描 263ms（去重 1 组/桶 3 个/缩略图 4 张）；非法丹方被拦截；丹方入库
+
+**剩余子项（下一步）**：
 - [ ] 打标 v1：`BackendSdScripts` 的 WD14 ONNX 打标（Python 内核侧）+ 标签编辑器（批量替换/正则/标签云）
-- [ ] `tiandi-recipe`：丹方 schema + 校验器 + SDXL 入门预设（参数取值参考 kohya_ss 默认与社区实践）
-- [ ] `tiandi-engine-compat` BackendSdScripts：venv 引导、TOML 生成（参数映射表先行实现核心子集：优化器/调度器/网络/缓存/采样）、进程监督、**IPC/Stdio 协议（hello 握手/JSON Lines 事件/心跳/控制命令/文件监控冗余）**、SSE 事件
+- [ ] `tiandi-engine-compat` BackendSdScripts：venv 引导、TOML 生成（参数映射核心子集）、进程监督、IPC/Stdio 协议（hello/JSON Lines/心跳/控制命令/文件监控冗余）、SSE 事件
 - [ ] 训练控制台：火候仪表盘（进度/loss/lr/ETA）、实时采样画廊、日志流
 - [ ] 药库 v1：产物落盘（safetensors + kohya 元数据 + 缩略图）、列表/重命名/删除
 - [ ] 错误路径：OOM/失败摘要（`fail.tail`）/一键重试

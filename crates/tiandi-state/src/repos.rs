@@ -3,9 +3,27 @@
 //! 领域实体 ↔ 行映射集中在各 repo 方法内；`Store` 持有连接并提供事务边界。
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use tiandi_core::{
     BaseModel, Checkpoint, Dataset, MetricPoint, ModelFamily, Project, Recipe, Run, RunState,
 };
+
+/// 数据集图像记录（扫描产物入库）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageRecord {
+    pub id: String,
+    pub dataset_id: String,
+    pub path: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub dhash: Option<String>,
+    pub bucket: Option<String>,
+    pub thumb: Option<String>,
+    pub exif: Option<String>,
+    /// 重复组主图 id（本图是重复项）
+    pub duplicate_of: Option<String>,
+    pub created_at: String,
+}
 
 /// 仓储错误。
 #[derive(Debug, thiserror::Error)]
@@ -179,6 +197,28 @@ impl Store {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_dataset(&self, id: &str) -> Result<Dataset, RepoError> {
+        self.conn
+            .query_row(
+                "SELECT id, name, dir, image_count, created_at FROM datasets WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(Dataset {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        dir: row.get(2)?,
+                        image_count: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| RepoError::NotFound {
+                entity: "dataset",
+                id: id.into(),
+            })
     }
 
     // ---- Recipe ----
@@ -369,6 +409,98 @@ impl Store {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    // ---- ImageRecord（数据集图像） ----
+
+    /// 批量写入扫描结果（先清空该数据集旧记录）。
+    pub fn replace_dataset_images(
+        &self,
+        dataset_id: &str,
+        records: &[ImageRecord],
+    ) -> Result<(), RepoError> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM image_files WHERE dataset_id = ?1",
+            [dataset_id],
+        )?;
+        for r in records {
+            tx.execute(
+                "INSERT INTO image_files
+                    (id, dataset_id, path, width, height, dhash, bucket, thumb, exif, duplicate_of, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    r.id,
+                    r.dataset_id,
+                    r.path,
+                    r.width.map(|w| w as i64),
+                    r.height.map(|h| h as i64),
+                    r.dhash,
+                    r.bucket,
+                    r.thumb,
+                    r.exif,
+                    r.duplicate_of,
+                    r.created_at
+                ],
+            )?;
+        }
+        // 同步数据集计数
+        tx.execute(
+            "UPDATE datasets SET image_count = (SELECT count(*) FROM image_files WHERE dataset_id = ?1) WHERE id = ?1",
+            [dataset_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_dataset_images(&self, dataset_id: &str) -> Result<Vec<ImageRecord>, RepoError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, dataset_id, path, width, height, dhash, bucket, thumb, exif, duplicate_of, created_at
+             FROM image_files WHERE dataset_id = ?1 ORDER BY path",
+        )?;
+        let rows = stmt.query_map([dataset_id], image_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn count_dataset_images(&self, dataset_id: &str) -> Result<u64, RepoError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM image_files WHERE dataset_id = ?1",
+            [dataset_id],
+            |row| row.get(0),
+        )?;
+        Ok(n as u64)
+    }
+
+    /// 桶分布（label -> 数量，按数量降序）。
+    pub fn dataset_bucket_distribution(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Vec<(String, u64)>, RepoError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT bucket, count(*) FROM image_files
+             WHERE dataset_id = ?1 AND bucket IS NOT NULL
+             GROUP BY bucket ORDER BY count(*) DESC",
+        )?;
+        let rows = stmt.query_map([dataset_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}
+
+fn image_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImageRecord> {
+    Ok(ImageRecord {
+        id: row.get(0)?,
+        dataset_id: row.get(1)?,
+        path: row.get(2)?,
+        width: row.get::<_, Option<i64>>(3)?.map(|v| v as u32),
+        height: row.get::<_, Option<i64>>(4)?.map(|v| v as u32),
+        dhash: row.get(5)?,
+        bucket: row.get(6)?,
+        thumb: row.get(7)?,
+        exif: row.get(8)?,
+        duplicate_of: row.get(9)?,
+        created_at: row.get(10)?,
+    })
 }
 
 #[cfg(test)]
@@ -468,5 +600,45 @@ mod tests {
         };
         s.insert_checkpoint(&c).unwrap();
         assert_eq!(s.list_checkpoints("r1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dataset_images_replace_and_distribute() {
+        let s = store();
+        let d = Dataset::new("测试集", "D:\\ds");
+        s.insert_dataset(&d).unwrap();
+
+        let mk = |path: &str, bucket: Option<&str>| ImageRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            dataset_id: d.id.clone(),
+            path: path.into(),
+            width: Some(1024),
+            height: Some(1024),
+            dhash: Some("abc".into()),
+            bucket: bucket.map(String::from),
+            thumb: None,
+            exif: None,
+            duplicate_of: None,
+            created_at: "t".into(),
+        };
+        let records = vec![
+            mk("a.png", Some("1024x1024")),
+            mk("b.png", Some("1024x1024")),
+            mk("c.png", Some("1024x768")),
+        ];
+        s.replace_dataset_images(&d.id, &records).unwrap();
+        assert_eq!(s.count_dataset_images(&d.id).unwrap(), 3);
+        assert_eq!(s.list_dataset_images(&d.id).unwrap().len(), 3);
+
+        let dist = s.dataset_bucket_distribution(&d.id).unwrap();
+        assert_eq!(
+            dist,
+            vec![("1024x1024".to_string(), 2), ("1024x768".to_string(), 1)]
+        );
+
+        // 再次替换会清空旧记录
+        s.replace_dataset_images(&d.id, &[]).unwrap();
+        assert_eq!(s.count_dataset_images(&d.id).unwrap(), 0);
+        assert_eq!(s.list_dataset_images(&d.id).unwrap().len(), 0);
     }
 }

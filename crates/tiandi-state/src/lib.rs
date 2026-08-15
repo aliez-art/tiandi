@@ -7,12 +7,12 @@ pub mod manifest;
 pub mod repos;
 
 pub use manifest::{ManifestError, RunManifest};
-pub use repos::{RepoError, Store};
+pub use repos::{ImageRecord, RepoError, Store};
 
 use rusqlite::Connection;
 
 /// 当前 schema 版本（`PRAGMA user_version`）。
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// 打开（或创建）数据库并执行迁移。
 pub fn open(path: &std::path::Path) -> Result<Connection, rusqlite::Error> {
@@ -88,6 +88,28 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
                 path       TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            "#,
+        )?;
+        conn.pragma_update(None, "user_version", 1)?;
+    }
+    if current < 2 {
+        // v2（M1）：数据集图像索引
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS image_files (
+                id           TEXT PRIMARY KEY,
+                dataset_id   TEXT NOT NULL,
+                path         TEXT NOT NULL,
+                width        INTEGER,
+                height       INTEGER,
+                dhash        TEXT,
+                bucket       TEXT,
+                thumb        TEXT,
+                exif         TEXT,
+                duplicate_of TEXT,
+                created_at   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_image_files_dataset ON image_files(dataset_id);
             "#,
         )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;

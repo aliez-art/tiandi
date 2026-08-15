@@ -1,6 +1,7 @@
-//! REST API：健康检查、项目、炼丹任务 CRUD、状态迁移、指标。
-//!
-//! M0 骨架端点；数据集/丹方/基底模型的完整 CRUD 随 M1 数据管线落地。
+//! REST API：健康检查、项目、炼丹任务 CRUD、状态迁移、指标、数据集、丹方。
+
+pub mod datasets;
+pub mod recipes;
 
 use axum::{
     extract::{Path, Query, State},
@@ -52,11 +53,9 @@ impl From<tiandi_state::RepoError> for ApiError {
 // ---------- 路由 ----------
 
 pub fn router(state: AppState) -> Router {
-    let store = state.store.clone();
-    let bus = state.bus.clone();
     let api_state = AppState {
-        store,
-        bus,
+        store: state.store.clone(),
+        bus: state.bus.clone(),
         demo: state.demo,
     };
     Router::new()
@@ -69,6 +68,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs/{id}/events", get(sse::stream_events))
         // 注：run_id="all" 走 {id} 路由即可（handler 内已支持不过滤语义），
         // 无需单独的静态路由（静态段会让 Path 提取器失败）
+        .merge(datasets::routes())
+        .merge(recipes::routes())
         .with_state(api_state)
 }
 

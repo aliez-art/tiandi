@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  API_BASE,
+  base,
   createSimulatedRun,
+  discoverBase,
   fetchHealth,
   listRuns,
   subscribeEvents,
@@ -30,7 +31,7 @@ const STATE_LABEL: Record<string, string> = {
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
-  const [healthError, setHealthError] = useState<string | null>(null)
+  const [connecting, setConnecting] = useState(true)
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<EventLine[]>([])
   const [busy, setBusy] = useState(false)
@@ -45,27 +46,47 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    fetchHealth()
-      .then((h) => {
-        setHealth(h)
-        setHealthError(null)
-      })
-      .catch((e: unknown) => {
-        setHealth(null)
-        setHealthError(e instanceof Error ? e.message : String(e))
-      })
-    void refreshRuns()
-    const es = subscribeEvents((line) => {
-      let type = 'log'
-      try {
-        type = (JSON.parse(line) as { type?: string }).type ?? 'log'
-      } catch {
-        /* 非 JSON 行按 log 处理 */
+    let cancelled = false
+    let es: EventSource | null = null
+
+    // 连接循环：端口发现失败则 1.5s 后重试（覆盖服务启动竞态与端口回退）
+    const connect = async () => {
+      const found = await discoverBase()
+      if (cancelled) return
+      if (!found) {
+        window.setTimeout(connect, 1500)
+        return
       }
-      setEvents((prev) => [...prev.slice(-49), { id: ++eventSeq.current, type, data: line }])
-      void refreshRuns()
-    })
-    return () => es.close()
+      try {
+        const h = await fetchHealth()
+        if (cancelled) return
+        setHealth(h)
+        setConnecting(false)
+      } catch (e) {
+        if (cancelled) return
+        console.error('health check failed', e)
+        window.setTimeout(connect, 1500)
+        return
+      }
+      await refreshRuns()
+      if (cancelled) return
+      es = subscribeEvents((line) => {
+        let type = 'log'
+        try {
+          type = (JSON.parse(line) as { type?: string }).type ?? 'log'
+        } catch {
+          /* 非 JSON 行按 log 处理 */
+        }
+        setEvents((prev) => [...prev.slice(-49), { id: ++eventSeq.current, type, data: line }])
+        void refreshRuns()
+      })
+    }
+    void connect()
+
+    return () => {
+      cancelled = true
+      es?.close()
+    }
   }, [refreshRuns])
 
   const onFire = async () => {
@@ -86,10 +107,12 @@ export default function App() {
       <header className="header">
         <h1>天地熔炉 <span className="sub">Tiandi Furnace</span></h1>
         <div className="status">
-          {health ? (
+          {connecting ? (
+            <span className="connecting">◌ 正在点火…</span>
+          ) : health ? (
             <span className="ok">● 已点火 v{health.version}{health.demo ? '（演示模式）' : ''}</span>
           ) : (
-            <span className="err">● 服务未连接{healthError ? `：${healthError}` : ''}</span>
+            <span className="err">● 服务未连接</span>
           )}
         </div>
       </header>
@@ -98,7 +121,7 @@ export default function App() {
         <section className="panel">
           <div className="panel-title">
             <h2>炼丹任务</h2>
-            <button onClick={onFire} disabled={busy}>
+            <button onClick={onFire} disabled={busy || connecting}>
               {busy ? '点火中…' : '点火（模拟炼丹）'}
             </button>
           </div>
@@ -119,8 +142,10 @@ export default function App() {
 
         <section className="panel">
           <h2>炉火观察孔（事件流）</h2>
-          {events.length === 0 ? (
-            <p className="hint">SSE 事件流等待中…（{API_BASE}/api/runs/all/events）</p>
+          {connecting ? (
+            <p className="hint">等待服务就绪…（自动探测 {base()} 及备用端口）</p>
+          ) : events.length === 0 ? (
+            <p className="hint">SSE 事件流等待中…（{base()}/api/runs/all/events）</p>
           ) : (
             <ul className="events">
               {events.map((e) => (
@@ -134,7 +159,7 @@ export default function App() {
         </section>
       </main>
 
-      <footer>本地服务 {API_BASE} · 仅绑定 127.0.0.1</footer>
+      <footer>本地服务 {base()} · 仅绑定 127.0.0.1</footer>
     </div>
   )
 }

@@ -128,14 +128,22 @@ async fn cmd_server(dir: &std::path::Path, port: u16, demo: bool, web: bool) {
         port,
         demo,
     };
+    // 端口回退在 serve 内部处理；浏览器模式先探测实际端口再打开
     if web {
-        let url = config.base_url();
+        let probe_port = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(_) => port, // 空闲：serve 将用它（此处仅探测，随即释放）
+            Err(_) => port + 1,
+        };
+        let url = format!("http://127.0.0.1:{probe_port}");
         if let Err(e) = webbrowser::open(&url) {
             tracing::warn!("打开浏览器失败：{e}；请手动访问 {url}");
         }
     }
-    if let Err(e) = serve(state, config).await {
-        eprintln!("✗ 服务异常退出：{e}");
-        std::process::exit(1);
+    match serve(state, config).await {
+        Ok(actual) => tracing::info!("服务已在 http://127.0.0.1:{actual} 提供"),
+        Err(e) => {
+            eprintln!("✗ 服务异常退出：{e}");
+            std::process::exit(1);
+        }
     }
 }

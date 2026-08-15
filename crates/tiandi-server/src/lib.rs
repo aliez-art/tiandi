@@ -73,14 +73,39 @@ impl ServerConfig {
 }
 
 /// 启动服务（阻塞直到 Ctrl-C）。
-pub async fn serve(state: AppState, config: ServerConfig) -> Result<(), std::io::Error> {
-    let listener = tokio::net::TcpListener::bind(config.addr()).await?;
-    let addr = listener.local_addr()?;
-    tracing::info!("天地熔炉已点火（server listening on {addr}）");
-    axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(std::io::Error::other)
+///
+/// 端口占用时自动向后回退尝试（最多 10 个端口），返回实际监听端口；
+/// 全部失败返回最后一次的绑定错误。
+pub async fn serve(state: AppState, config: ServerConfig) -> Result<u16, std::io::Error> {
+    let mut last_err = None;
+    for offset in 0..10 {
+        let port = config.port + offset;
+        let addr = format!("{}:{}", config.host, port)
+            .parse::<SocketAddr>()
+            .expect("合法地址");
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                let actual = listener.local_addr()?;
+                if actual.port() != config.port {
+                    tracing::warn!(
+                        "端口 {port_0} 被占用，已回退到 {}",
+                        actual.port(),
+                        port_0 = config.port
+                    );
+                }
+                tracing::info!("天地熔炉已点火（server listening on {actual}）");
+                axum::serve(listener, build_router(state))
+                    .with_graceful_shutdown(shutdown_signal())
+                    .await
+                    .map_err(std::io::Error::other)?;
+                return Ok(actual.port());
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("端口绑定失败")))
 }
 
 async fn shutdown_signal() {

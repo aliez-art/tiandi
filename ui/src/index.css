@@ -38,6 +38,7 @@ body {
 
 .status .ok { color: var(--celadon); }
 .status .err { color: var(--cinnabar); }
+.status .connecting { color: var(--amber); }
 
 main { display: grid; gap: 20px; }
 

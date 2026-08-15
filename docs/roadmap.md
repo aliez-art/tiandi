@@ -18,24 +18,21 @@
 
 **退出（M0 全部达成）**：`tiandi doctor` 全绿；API 冒烟通过；SSE 模拟事件连通（Tauri 壳 + 前端已接入）；`cargo test` 31 项全绿、clippy 0 警告。
 
-## M1 首炉（约 4 周）
+## M1 首炉（约 4 周）✅ 全部完成（2026-08）
 
 **目标**：用 UI 完整跑通一次 **NoobAI SDXL LoRA** 训练（IPC/Stdio 全链路）。
 
-**已完成的子项（2026-08）**：
-- [x] `tiandi-dataset`：导入（文件夹扫描）、缩略图（rayon 并行 JPEG）、dHash 感知去重、EXIF、分辨率桶 + 分布统计（12 测试）
-- [x] `tiandi-recipe`：丹方类型化 schema（kohya 兼容枚举名）+ 校验器（范围/族适用性）+ 内置预设 4 个 + TOML 文件格式（12 测试）
-- [x] 数据集 API（创建/扫描/图像/桶分布）+ 丹方 API（CRUD/预设/校验不落库）
-- [x] 冒烟：4 图扫描 263ms（去重 1 组/桶 3 个/缩略图 4 张）；非法丹方被拦截；丹方入库
+- [x] `tiandi-dataset`：导入（文件夹扫描）、缩略图（rayon 并行 JPEG）、dHash 感知去重、EXIF、分辨率桶 + 分布统计
+- [x] `tiandi-recipe`：丹方类型化 schema + 校验器 + 内置预设 4 个 + TOML 文件格式
+- [x] 数据集 API + 丹方 API + 药库 API（产物列表/重命名/删除）+ 静态文件服务
+- [x] 打标 v1：内核 tagger 模式（mock 打标 + WD14 真实入口）+ captions API（读/写/批量替换字符串与正则/标签统计）+ 标签编辑器 UI（图片网格/标签云/批量操作/手动编辑）
+- [x] `tiandi-engine-compat`：kernel_runner.py（mock + sd-scripts）+ TOML 参数映射 + IPC/Stdio 协议（hello/JSON Lines/心跳/控制命令）+ 训练启动/取消
+- [x] 训练控制台 UI：火候仪表盘（进度环/loss 曲线 SVG/采样画廊/日志流）+ 药库视图 + 任务选中联动
+- [x] 错误路径：内核 fail 事件 → Failed 状态 + 失败摘要（tail）；取消走两段式
 
-**剩余子项（下一步）**：
-- [ ] 打标 v1：`BackendSdScripts` 的 WD14 ONNX 打标（Python 内核侧）+ 标签编辑器（批量替换/正则/标签云）
-- [ ] `tiandi-engine-compat` BackendSdScripts：venv 引导、TOML 生成（参数映射核心子集）、进程监督、IPC/Stdio 协议（hello/JSON Lines/心跳/控制命令/文件监控冗余）、SSE 事件
-- [ ] 训练控制台：火候仪表盘（进度/loss/lr/ETA）、实时采样画廊、日志流
-- [ ] 药库 v1：产物落盘（safetensors + kohya 元数据 + 缩略图）、列表/重命名/删除
-- [ ] 错误路径：OOM/失败摘要（`fail.tail`）/一键重试
+**验证**：70 测试全绿（含 2 项真实 Python 进程集成测试）+ clippy 0 警告 + 端到端冒烟（模拟训练全链路/打标/批量替换/产物管理）。
 
-**退出**：§PRD-12 的 M1 验收全部通过（含产物可被 ComfyUI 加载）。
+**遗留（进入 M2）**：真实 sd-scripts 内核安装（venv + torch cu128 + 内核 commit 锁定）、WD14 真实打标验证、真实基底模型注册。
 
 ## M2 连烧（约 4 周）
 

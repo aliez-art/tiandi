@@ -103,11 +103,10 @@ async fn handle_event(
                 advance(&mut store, bus, &run_id, run.state, RunState::Done).await;
             }
         }
-        Event::Fail { tail, .. }
-            if !run.state.is_terminal() => {
-                warn!("任务 {run_id} 失败：{tail}");
-                advance(&mut store, bus, &run_id, run.state, RunState::Failed).await;
-            }
+        Event::Fail { tail, .. } if !run.state.is_terminal() => {
+            warn!("任务 {run_id} 失败：{tail}");
+            advance(&mut store, bus, &run_id, run.state, RunState::Failed).await;
+        }
         _ => {}
     }
 }

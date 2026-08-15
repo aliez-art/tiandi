@@ -132,3 +132,95 @@ export async function runLogs(runId: string): Promise<string[]> {
   if (!res.ok) throw new Error(`logs ${res.status}`)
   return res.json()
 }
+
+export interface Dataset {
+  id: string
+  name: string
+  dir: string
+  image_count: number
+  created_at: string
+}
+
+export interface CaptionEntry {
+  path: string
+  caption: string
+  has_file: boolean
+}
+
+export interface TagStat {
+  tag: string
+  count: number
+}
+
+export async function listDatasets(): Promise<Dataset[]> {
+  const res = await fetch(`${base()}/api/datasets`)
+  if (!res.ok) throw new Error(`datasets ${res.status}`)
+  return res.json()
+}
+
+export async function createDataset(name: string, dir: string): Promise<Dataset> {
+  const res = await fetch(`${base()}/api/datasets`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, dir }),
+  })
+  if (!res.ok) throw new Error(`create dataset ${res.status}`)
+  return res.json()
+}
+
+export async function scanDataset(
+  id: string,
+  opts?: { resolution?: number },
+): Promise<{ report: { total: number; invalid: number; duplicate_groups: string[][]; buckets: [string, number][]; elapsed_ms: number }; images: number }> {
+  const res = await fetch(`${base()}/api/datasets/${id}/scan`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(opts ?? {}),
+  })
+  if (!res.ok) throw new Error(`scan dataset ${res.status}`)
+  return res.json()
+}
+
+export async function listCaptions(id: string): Promise<CaptionEntry[]> {
+  const res = await fetch(`${base()}/api/datasets/${id}/captions`)
+  if (!res.ok) throw new Error(`captions ${res.status}`)
+  return res.json()
+}
+
+export async function saveCaption(id: string, path: string, text: string): Promise<void> {
+  const res = await fetch(`${base()}/api/datasets/${id}/caption`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, text }),
+  })
+  if (!res.ok) throw new Error(`save caption ${res.status}`)
+}
+
+export async function batchReplaceCaptions(
+  id: string,
+  rules: { find: string; replace: string; regex?: boolean }[],
+): Promise<{ affected: number; total: number }> {
+  const res = await fetch(`${base()}/api/datasets/${id}/captions/batch`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ rules }),
+  })
+  if (!res.ok) throw new Error(`batch replace ${res.status}`)
+  return res.json()
+}
+
+export async function tagStats(id: string): Promise<TagStat[]> {
+  const res = await fetch(`${base()}/api/datasets/${id}/tags`)
+  if (!res.ok) throw new Error(`tags ${res.status}`)
+  return res.json()
+}
+
+export async function runTagging(id: string, mode: string): Promise<{ mode: string; tagged: number }> {
+  const res = await fetch(`${base()}/api/datasets/${id}/tag`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  })
+  if (!res.ok) throw new Error(`tagging ${res.status}`)
+  return res.json()
+}

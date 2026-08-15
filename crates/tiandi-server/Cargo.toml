@@ -14,6 +14,7 @@ tracing.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 image.workspace = true
+regex = "1"
 axum.workspace = true
 tower-http.workspace = true
 futures = "0.3"

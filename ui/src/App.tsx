@@ -9,6 +9,7 @@ import {
   type Run,
 } from './api'
 import Console, { type EventLine } from './components/Console'
+import DatasetView from './components/DatasetView'
 
 const STATE_LABEL: Record<string, string> = {
   created: '已创建',
@@ -26,6 +27,7 @@ const STATE_LABEL: Record<string, string> = {
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [connecting, setConnecting] = useState(true)
+  const [tab, setTab] = useState<'train' | 'dataset'>('train')
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -111,6 +113,20 @@ export default function App() {
         <h1>
           天地熔炉 <span className="sub">Tiandi Furnace</span>
         </h1>
+        <nav className="tabs">
+          <button
+            className={`tab ${tab === 'train' ? 'active' : ''}`}
+            onClick={() => setTab('train')}
+          >
+            炼丹
+          </button>
+          <button
+            className={`tab ${tab === 'dataset' ? 'active' : ''}`}
+            onClick={() => setTab('dataset')}
+          >
+            药材
+          </button>
+        </nav>
         <div className="status">
           {connecting ? (
             <span className="connecting">◌ 正在点火…</span>
@@ -125,49 +141,55 @@ export default function App() {
         </div>
       </header>
 
-      <main className="layout">
-        {/* 任务列表（丹房） */}
-        <aside className="sidebar">
-          <div className="panel-title">
-            <h2>炼丹任务</h2>
-            <button onClick={onFire} disabled={busy || connecting} title="创建模拟炼丹任务">
-              {busy ? '点火中…' : '点火'}
-            </button>
-          </div>
-          {runs.length === 0 ? (
-            <p className="hint">还没有任务。点击「点火」开始。</p>
-          ) : (
-            <ul className="runs">
-              {runs.map((r) => (
-                <li
-                  key={r.id}
-                  className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
-                  onClick={() => setSelected(r.id)}
-                >
-                  <span className="run-id">{r.id.slice(0, 8)}</span>
-                  <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
-                  <span className="run-time">
-                    {new Date(r.created_at).toLocaleTimeString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
-
-        {/* 训练控制台 / 药库 */}
-        <section className="content">
-          {selectedRun ? (
-            <Console key={selectedRun.id} run={selectedRun} events={events} />
-          ) : (
-            <div className="panel">
-              <p className="hint">
-                选择一个任务查看训练控制台；或点击「点火」创建模拟炼丹任务（完整 IPC 链路演示）。
-              </p>
+      {tab === 'train' ? (
+        <main className="layout">
+          {/* 任务列表（丹房） */}
+          <aside className="sidebar">
+            <div className="panel-title">
+              <h2>炼丹任务</h2>
+              <button onClick={onFire} disabled={busy || connecting} title="创建模拟炼丹任务">
+                {busy ? '点火中…' : '点火'}
+              </button>
             </div>
-          )}
-        </section>
-      </main>
+            {runs.length === 0 ? (
+              <p className="hint">还没有任务。点击「点火」开始。</p>
+            ) : (
+              <ul className="runs">
+                {runs.map((r) => (
+                  <li
+                    key={r.id}
+                    className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
+                    onClick={() => setSelected(r.id)}
+                  >
+                    <span className="run-id">{r.id.slice(0, 8)}</span>
+                    <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
+                    <span className="run-time">
+                      {new Date(r.created_at).toLocaleTimeString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+
+          {/* 训练控制台 / 药库 */}
+          <section className="content">
+            {selectedRun ? (
+              <Console key={selectedRun.id} run={selectedRun} events={events} />
+            ) : (
+              <div className="panel">
+                <p className="hint">
+                  选择一个任务查看训练控制台；或点击「点火」创建模拟炼丹任务（完整 IPC 链路演示）。
+                </p>
+              </div>
+            )}
+          </section>
+        </main>
+      ) : (
+        <main className="layout-single">
+          <DatasetView />
+        </main>
+      )}
 
       <footer>本地服务 127.0.0.1 · 仅绑定本机</footer>
     </div>

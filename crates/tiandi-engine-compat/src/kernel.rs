@@ -78,6 +78,7 @@ pub struct KernelLaunch {
 pub enum KernelMode {
     Mock,
     SdScripts,
+    Tagger,
 }
 
 impl KernelMode {
@@ -85,6 +86,7 @@ impl KernelMode {
         match self {
             Self::Mock => "mock",
             Self::SdScripts => "sdscripts",
+            Self::Tagger => "tagger",
         }
     }
 }

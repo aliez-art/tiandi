@@ -4525,6 +4525,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "image",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

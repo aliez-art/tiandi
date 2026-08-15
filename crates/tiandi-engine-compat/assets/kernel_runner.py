@@ -194,6 +194,84 @@ def kill_tree(proc: subprocess.Popen) -> None:
             pass
 
 
+# ---------------------------------------------------------------- 打标（tagger）模式
+
+TAGGER_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+
+def run_tagger(dataset_dir: str, mode: str) -> None:
+    """批量打标：为数据集每张图写同名 <stem>.txt caption（kohya 约定）。
+
+    mode=mock：轻量占位打标（协议联调/流程演示）
+    mode=wd14：调用 sd-scripts 的 WD14 tagger（需内核环境，torch + onnxruntime）
+    """
+    images = []
+    for root, dirs, files in os.walk(dataset_dir):
+        # 跳过内部产物目录（缩略图等）
+        dirs[:] = [d for d in dirs if d not in ("thumbs", ".cache")]
+        for f in files:
+            if os.path.splitext(f)[1].lower() in TAGGER_IMAGE_EXTS:
+                images.append(os.path.join(root, f))
+    images.sort()
+    log(f"打标开始：{len(images)} 张图（mode={mode}）")
+
+    if mode == "wd14":
+        _run_wd14(dataset_dir, images)
+        return
+
+    # mock：占位标签（文件名特征 + 通用词）
+    for i, img in enumerate(images):
+        stem = os.path.splitext(os.path.basename(img))[0]
+        words = [w for w in stem.replace("_", " ").split() if w.isalnum()]
+        tags = ["sample", "photo"] + words[:4]
+        caption = ", ".join(dict.fromkeys(tags))  # 去重保序
+        caption_path = os.path.splitext(img)[0] + ".txt"
+        with open(caption_path, "w", encoding="utf-8") as f:
+            f.write(caption + "\n")
+        emit({
+            "type": "progress",
+            "run_id": os.environ.get("TIANDI_RUN_ID", ""),
+            "step": i + 1,
+            "total": len(images),
+            "epoch": (i + 1) / len(images),
+            "loss": 0.0,
+            "lr": 0.0,
+            "eta_s": None,
+        })
+    emit({"type": "done", "run_id": os.environ.get("TIANDI_RUN_ID", ""), "code": 0})
+
+
+def _run_wd14(dataset_dir: str, images: list) -> None:
+    """真实 WD14 打标：调用 sd-scripts 的 tag_images_by_wd14_tagger.py（需内核环境）。"""
+    script = os.environ.get(
+        "TIANDI_WD14_SCRIPT",
+        os.path.join("sd-scripts", "finetune", "tag_images_by_wd14_tagger.py"),
+    )
+    repo = os.environ.get("TIANDI_WD14_REPO", "SmilingWolf/wd-convnext-tagger-v3")
+    cmd = [
+        sys.executable, script,
+        "--onnx", "--batch_size", "4",
+        "--repo_id", repo,
+        "--recursive",
+        "--remove_underscore",
+        dataset_dir,
+    ]
+    log(f"WD14 打标：{' '.join(cmd)}")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace")
+    for line in proc.stdout:
+        line = line.rstrip()
+        print(line, file=sys.stderr, flush=True)
+        tail = line.strip()
+        if tail:
+            log(tail)
+    code = proc.wait()
+    if code == 0:
+        emit({"type": "done", "run_id": os.environ.get("TIANDI_RUN_ID", ""), "code": 0})
+    else:
+        emit({"type": "fail", "code": code, "tail": "WD14 打标失败（请先安装内核环境）"})
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         emit({"type": "fail", "code": 2, "tail": "用法：kernel_runner.py <config.toml> [--mock]"})
@@ -206,6 +284,9 @@ def main() -> None:
     try:
         if mode == "mock":
             run_mock(config_path)
+        elif mode == "tagger":
+            tag_mode = os.environ.get("TIANDI_TAGGER_MODE", "mock")
+            run_tagger(os.environ.get("TIANDI_TAGGER_DIR", "."), tag_mode)
         else:
             run_sdscripts(config_path)
     except Exception as exc:  # noqa: BLE001

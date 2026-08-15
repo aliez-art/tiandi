@@ -14,9 +14,9 @@
 - [x] `tiandi-cli`：`tiandi init`（工作区 + 数据库）、`tiandi doctor`（磁盘/内存/GPU-CUDA/端口）、`tiandi server`（127.0.0.1 + 可选 --web）
 - [x] `tiandi-engine`：`Trainer` trait 骨架（info/start/pause/resume/cancel/query，M1 由 compat 实现）
 - [x] 质量门：cargo fmt / clippy（0 警告）/ test（31 项全绿）+ 冒烟验证（真实进程：init → server → 创建 run → 状态机推进 → metrics 入库 → SSE 事件流）
-- [ ] `tiandi-app`：Tauri 2 壳 + React 空壳（丹房首页占位）——M0 剩余项，浏览器模式（`tiandi server --web`）已可先行使用
+- [x] `tiandi-app`：Tauri 2 壳（单进程架构：壳内嵌 tiandi-server，数据目录 = 系统应用数据目录）+ React 空壳前端（`ui/`：Vite + React + TS，丹房首页：任务列表/点火按钮/SSE 炉火观察孔，深色琉璃主题）；浏览器模式经 vite proxy 或直连（CORS 已放行）
 
-**退出（M0 核心已达成）**：`tiandi doctor` 全绿；API 冒烟通过；SSE 模拟事件连通（UI 壳落地后即可接入）。
+**退出（M0 全部达成）**：`tiandi doctor` 全绿；API 冒烟通过；SSE 模拟事件连通（Tauri 壳 + 前端已接入）；`cargo test` 31 项全绿、clippy 0 警告。
 
 ## M1 首炉（约 4 周）
 

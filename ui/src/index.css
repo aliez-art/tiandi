@@ -1,0 +1,126 @@
+/* 天地熔炉 · 丹房首页（M0 空壳）—— 深色琉璃质感（PRD §9 设计语言） */
+
+:root {
+  --bg: #14151a;
+  --bg-panel: #1c1e26;
+  --bg-elev: #242733;
+  --ink: #e8e6df;
+  --ink-dim: #9a978e;
+  --cinnabar: #c0392b;   /* 朱砂红：运行/进度 */
+  --amber: #d4a24e;      /* 琥珀金：产物/高亮 */
+  --celadon: #7fb5a0;    /* 青瓷青：成功/数据 */
+  --line: #33364a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.app { max-width: 1080px; margin: 0 auto; padding: 24px 20px 48px; }
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+}
+
+.header h1 { margin: 0; font-size: 26px; letter-spacing: 2px; }
+.header .sub { color: var(--ink-dim); font-size: 13px; letter-spacing: 1px; margin-left: 8px; }
+
+.status .ok { color: var(--celadon); }
+.status .err { color: var(--cinnabar); }
+
+main { display: grid; gap: 20px; }
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.panel-title { display: flex; align-items: center; justify-content: space-between; }
+
+h2 { margin: 0 0 12px; font-size: 16px; color: var(--amber); }
+
+button {
+  background: var(--cinnabar);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+.hint { color: var(--ink-dim); }
+
+.runs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+
+.run {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: var(--bg-elev);
+  border-radius: 8px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--line);
+}
+.run.done { border-left-color: var(--celadon); }
+.run.running { border-left-color: var(--cinnabar); }
+.run.failed { border-left-color: var(--cinnabar); filter: brightness(0.85); }
+
+.run-id { font-family: monospace; color: var(--ink-dim); }
+.run-state { color: var(--amber); font-weight: 600; }
+.run-time { margin-left: auto; color: var(--ink-dim); font-size: 12px; }
+
+.events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.ev {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  background: var(--bg-elev);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.ev-type { font-size: 12px; color: var(--ink-dim); }
+.ev.progress .ev-type { color: var(--cinnabar); }
+.ev.run_state_changed .ev-type { color: var(--amber); }
+.ev.sample .ev-type { color: var(--celadon); }
+
+.ev code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+footer {
+  margin-top: 28px;
+  color: var(--ink-dim);
+  font-size: 12px;
+  text-align: center;
+}

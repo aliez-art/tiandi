@@ -12,6 +12,7 @@ dist-electron/
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+**/gen/schemas/
 
 # Python bridge (compat engine runtime, managed venvs)
 .venv/

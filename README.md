@@ -18,10 +18,9 @@
 | 架构设计（v1.1） | ✅ `docs/architecture.md`（含 IPC/Stdio 协议细节） |
 | 里程碑路线图 | ✅ `docs/roadmap.md`（M0–M3 + 远期探索） |
 | 模型支持矩阵 | ✅ `docs/model-support.md` |
-| **M0 核心骨架** | ✅ 完成：core / state / server / cli / engine（31 项测试全绿 + clippy 0 警告 + 冒烟通过） |
-| M0 剩余：Tauri 壳 + React 空壳 | ⏳ 浏览器模式（`tiandi server --web`）已可先行使用 |
+| **M0 全部完成** | ✅ core/state/server/cli/engine + Tauri 2 壳 + React 前端（31 测试全绿 + clippy 0 警告 + 冒烟通过） |
 
-> 当前状态：**M0 核心完成，M1（SDXL 全流程）未开始**。快速体验：`tiandi init` → `tiandi server`。
+> 当前状态：**M0 完成，M1（SDXL 全流程）未开始**。快速体验：`tiandi init` → `tiandi server --web`（浏览器模式）或运行桌面壳 `tiandi-app`。
 
 ## 快速开始（M0 骨架）
 
@@ -41,21 +40,22 @@ curl -N 'http://127.0.0.1:18765/api/runs/all/events'      # SSE 事件流（进�
 ```text
 tiandi/
 ├── PRD.md                # 产品需求文档（v1.1）
+├── ui/                   # 前端（Vite + React + TS）：丹房首页、SSE 事件流
 ├── docs/
 │   ├── architecture.md   # 技术架构（crate 分层、领域模型、IPC/Stdio 引擎协议）
 │   ├── roadmap.md        # 里程碑 M0–M3 + 远期探索
 │   └── model-support.md  # 模型支持矩阵与训练要点
 ├── crates/
-│   ├── tiandi-core        # 领域模型与用例、任务状态机
-│   ├── tiandi-state       # SQLite 持久化
-│   ├── tiandi-dataset     # 数据管线（图像/去重/分桶/缓存）
-│   ├── tiandi-recipe      # 丹方 schema、校验、预设
-│   ├── tiandi-engine      # Trainer trait、IPC 事件协议
-│   ├── tiandi-engine-compat   # Python 内核编排（sd-scripts / ai-toolkit 双后端）
+│   ├── tiandi-core        # 领域模型与用例、任务状态机、事件总线
+│   ├── tiandi-state       # SQLite 持久化（迁移/仓储/manifest）
+│   ├── tiandi-dataset     # 数据管线（图像/去重/分桶/缓存）—— M1 实现
+│   ├── tiandi-recipe      # 丹方 schema、校验、预设 —— M1 实现
+│   ├── tiandi-engine      # Trainer trait（M1 由 compat 实现 IPC/Stdio 桥）
+│   ├── tiandi-engine-compat   # Python 内核编排（sd-scripts / ai-toolkit）—— M1 实现
 │   ├── tiandi-engine-native   # candle（远期探索，不排期）
 │   ├── tiandi-server      # axum REST + SSE
-│   ├── tiandi-cli         # tiandi run/import/doctor
-│   └── tiandi-app         # Tauri 2 桌面壳
+│   ├── tiandi-cli         # tiandi init/doctor/server
+│   └── tiandi-app         # Tauri 2 桌面壳（内嵌 server + WebView）
 └── Cargo.toml            # workspace
 ```
 

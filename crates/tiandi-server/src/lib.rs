@@ -37,7 +37,9 @@ impl AppState {
 
 /// 构建完整路由。
 pub fn build_router(state: AppState) -> Router {
-    api::router(state)
+    // 本地单用户工具：WebView（tauri://localhost）与纯浏览器模式均需跨源访问，
+    // 且服务只绑 127.0.0.1，permissive CORS 无风险（PRD §7 安全要求）。
+    api::router(state).layer(tower_http::cors::CorsLayer::permissive())
 }
 
 /// 服务器配置。

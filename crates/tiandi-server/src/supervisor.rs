@@ -19,7 +19,9 @@ pub fn spawn(state: AppState) {
     let mut rx = state.bus.subscribe();
     let store = state.store.clone();
     let runs_dir = state.trainer.runs_dir().to_path_buf();
-    let output_root = crate::output_root(&runs_dir);
+    // 规范化产物根（相对/含符号链接路径统一；越界校验依赖两侧一致）
+    let output_root = std::fs::canonicalize(crate::output_root(&runs_dir))
+        .unwrap_or_else(|_| crate::output_root(&runs_dir));
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -32,6 +34,10 @@ pub fn spawn(state: AppState) {
 }
 
 /// 事件 → 状态机/指标/文件。
+///
+/// 持锁原则：锁内只做 DB 操作（状态迁移/指标/checkpoint 入库）；
+/// 磁盘 IO（日志追加、占位图生成、产物扫描）一律在锁外执行，
+/// 避免长持锁阻塞 API 侧对 store 的访问。
 async fn handle_event(
     store: &Arc<Mutex<tiandi_state::Store>>,
     bus: &tiandi_core::EventBus,
@@ -43,24 +49,33 @@ async fn handle_event(
         Some(id) => id.to_string(),
         None => return,
     };
-    let mut store = store.lock().await;
-    let run = match store.get_run(&run_id) {
-        Ok(r) => r,
-        Err(_) => return,
+    // 锁内快速读取 run（事件归属校验：未知任务的事件一律忽略）
+    let run = {
+        let store = store.lock().await;
+        match store.get_run(&run_id) {
+            Ok(r) => r,
+            Err(_) => return,
+        }
     };
+    // 规范化产物根：starts_with / strip_prefix 两侧必须一致（Windows canonicalize
+    // 会带 \\?\ 前缀）；目录未落盘时沿父目录宽松解析，不可解析时退回原路径
+    let output_root = canonicalize_loose(output_root).unwrap_or_else(|| output_root.to_path_buf());
 
     match &ev {
         Event::Hello { .. } => {
-            // 内核握手：准备中
+            // 内核握手：准备中（claim 已置 Preparing，此处幂等 no-op）
+            let mut store = store.lock().await;
             advance(&mut store, bus, &run_id, run.state, RunState::Preparing).await;
         }
         Event::Progress { .. } => {
             // 首个进度 → 炼丹中
             if matches!(run.state, RunState::Preparing | RunState::Queued) {
+                let mut store = store.lock().await;
                 advance(&mut store, bus, &run_id, run.state, RunState::Running).await;
             }
         }
         Event::Metric { step, loss, lr, .. } => {
+            let store = store.lock().await;
             let _ = store.insert_metric(&tiandi_core::MetricPoint {
                 run_id: run_id.clone(),
                 step: *step,
@@ -69,14 +84,20 @@ async fn handle_event(
             });
         }
         Event::Sample { path, .. } => {
-            // 采样图：绝对路径直接使用；相对路径按 output 根解析（产物根）
-            let abs = abs_output_path(output_root, path);
-            if let Some(abs) = &abs {
-                if !abs.exists() {
-                    let _ = gen_placeholder_sample(abs, sample_step_hint(path));
-                }
+            // 采样图：路径越界防护（绝对路径规范化后须在 output 根内；
+            // 相对路径禁止 `..` 逃逸），越界 → 跳过（abs_output_path 内已 warn）
+            let Some(abs) = abs_output_path(&output_root, path) else {
+                return;
+            };
+            // 磁盘 IO（占位图生成）锁外执行
+            if !abs.exists() {
+                let _ = gen_placeholder_sample(&abs, sample_step_hint(path));
             }
-            let rel = rel_output_path(output_root, &abs.unwrap_or_else(|| PathBuf::from(path)));
+            let Some(rel) = rel_output_path(&output_root, &abs) else {
+                warn!("采样路径越界，跳过入库：{path}");
+                return;
+            };
+            let store = store.lock().await;
             let _ = store.insert_checkpoint(&tiandi_core::Checkpoint {
                 id: uuid::Uuid::new_v4().to_string(),
                 run_id: run_id.clone(),
@@ -86,51 +107,135 @@ async fn handle_event(
             });
         }
         Event::Log { msg, level, .. } => {
-            // 日志落盘（runs/<id>/logs/training.log）
-            let log_path = runs_dir.join(&run_id).join("logs/training.log");
-            if let Some(parent) = log_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
-                let ts = chrono::Local::now().format("%H:%M:%S");
-                let _ = writeln!(f, "[{ts}] [{level}] {msg}");
-            }
+            // 日志落盘（锁外 IO，>5MB 先旋转）
+            append_training_log(runs_dir, &run_id, level, msg);
         }
         Event::Done { .. } => {
             if !run.state.is_terminal() {
-                // 训练完成：扫描产物目录（output/<id>），把 LoRA 产物入库（药库）
-                scan_lora_artifacts(&store, output_root, &run_id);
+                // 产物扫描（锁外 IO，返回文件列表），锁内幂等入库
+                let files = scan_lora_artifacts(&output_root, &run_id);
+                if !files.is_empty() {
+                    let store = store.lock().await;
+                    let existing: std::collections::HashSet<String> = store
+                        .list_checkpoints(&run_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|c| c.path)
+                        .collect();
+                    for path in files {
+                        let Some(rel) = rel_output_path(&output_root, &path) else {
+                            continue;
+                        };
+                        if existing.contains(&rel) {
+                            continue;
+                        }
+                        let _ = store.insert_checkpoint(&tiandi_core::Checkpoint {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            run_id: run_id.clone(),
+                            kind: "lora".into(),
+                            path: rel,
+                            created_at: chrono::Utc::now().to_rfc3339(),
+                        });
+                    }
+                }
+                let mut store = store.lock().await;
                 advance(&mut store, bus, &run_id, run.state, RunState::Done).await;
             }
         }
         Event::Fail { tail, .. } if !run.state.is_terminal() => {
             warn!("任务 {run_id} 失败：{tail}");
+            let mut store = store.lock().await;
             advance(&mut store, bus, &run_id, run.state, RunState::Failed).await;
         }
         _ => {}
     }
 }
 
-/// 采样图绝对路径（内核可能给绝对路径或相对 output 根路径）。
+/// 产物绝对路径校验（防内核给出的路径逃逸 output 根）。
+///
+/// - 绝对路径：规范化（文件未落盘时沿父目录宽松解析）后必须位于 output 根内，
+///   返回规范化后的路径（保证与根路径两侧一致，strip_prefix 才可靠）；
+/// - 相对路径：禁止父目录/根/前缀组件（`..` 出现在任意位置均拒绝），按 output 根解析；
+/// - 不满足：返回 `None`（调用方跳过，越界处已 warn）。
 fn abs_output_path(output_root: &Path, path: &str) -> Option<PathBuf> {
+    use std::path::Component;
     let p = PathBuf::from(path);
     if p.is_absolute() {
-        Some(p)
+        let canon = canonicalize_loose(&p)?;
+        let root = std::fs::canonicalize(output_root).unwrap_or_else(|_| output_root.to_path_buf());
+        if !canon.starts_with(&root) {
+            warn!("产物路径越界，已跳过：{path}");
+            return None;
+        }
+        Some(canon)
     } else {
+        if p.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
+            warn!("产物路径越界，已跳过：{path}");
+            return None;
+        }
         Some(output_root.join(p))
     }
 }
 
-/// 相对 output 根的路径（入库/URL 用）。
-fn rel_output_path(output_root: &Path, abs: &Path) -> String {
+/// 宽松规范化：路径存在则直接 canonicalize；否则沿父目录向上找到最近的
+/// 已存在祖先并拼接剩余部分（占位图等尚未落盘的路径需要）。
+fn canonicalize_loose(p: &Path) -> Option<PathBuf> {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return Some(c);
+    }
+    let mut ancestor = p;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        let parent = ancestor.parent()?;
+        if parent == ancestor {
+            return None; // 已到根仍不存在（理论上不可能：根必存在）
+        }
+        tail.push(ancestor.file_name()?.to_os_string());
+        ancestor = parent;
+        if let Ok(c) = std::fs::canonicalize(ancestor) {
+            let mut out = c;
+            for seg in tail.iter().rev() {
+                out.push(seg);
+            }
+            return Some(out);
+        }
+    }
+}
+
+/// 相对 output 根的路径（入库/URL 用）；不在根内 → `None`（调用方跳过）。
+fn rel_output_path(output_root: &Path, abs: &Path) -> Option<String> {
     abs.strip_prefix(output_root)
-        .unwrap_or(abs)
-        .to_string_lossy()
-        .replace('\\', "/")
+        .ok()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+}
+
+/// 日志落盘（runs/<id>/logs/training.log）：超过 5MB 先旋转为 training.log.1。
+/// 锁外 IO：仅写文件，不触碰数据库。
+fn append_training_log(runs_dir: &Path, run_id: &str, level: &str, msg: &str) {
+    const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+    let log_path = runs_dir.join(run_id).join("logs").join("training.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // 旋转：超过 5MB → training.log → training.log.1（先删旧的 .1）
+    if std::fs::metadata(&log_path).is_ok_and(|m| m.len() > MAX_LOG_BYTES) {
+        let rotated = log_path.with_extension("log.1");
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(&log_path, &rotated);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let ts = chrono::Local::now().format("%H:%M:%S");
+        let _ = writeln!(f, "[{ts}] [{level}] {msg}");
+    }
 }
 
 /// 从采样文件名提取 step 序号（"mock-step-0010.png" → 10）。
@@ -181,13 +286,14 @@ fn hue_to_rgb(h: f32, t: f32) -> u8 {
 }
 
 /// 扫描产物根下 runs 的 checkpoints（*.safetensors，递归；ai-toolkit
-/// 后端产物在 <name>/ 子目录）入库。产物路径相对 output 根。
-fn scan_lora_artifacts(
-    store: &tokio::sync::MutexGuard<'_, tiandi_state::Store>,
-    output_root: &Path,
-    run_id: &str,
-) {
-    let ckpts = output_root.join(run_id);
+/// 后端产物在 <name>/ 子目录）。纯磁盘 IO（锁外执行），返回文件列表；
+/// 入库由调用方在锁内幂等完成。产物路径相对 output 根。
+fn scan_lora_artifacts(output_root: &Path, run_id: &str) -> Vec<PathBuf> {
+    let root = match std::fs::canonicalize(output_root) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let ckpts = root.join(run_id);
     let mut files: Vec<PathBuf> = Vec::new();
     let mut stack = vec![ckpts];
     while let Some(dir) = stack.pop() {
@@ -211,29 +317,7 @@ fn scan_lora_artifacts(
             }
         }
     }
-    for path in files {
-        // 已入库则跳过（幂等）
-        let rel = path
-            .strip_prefix(output_root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let existing = store
-            .list_checkpoints(run_id)
-            .unwrap_or_default()
-            .iter()
-            .any(|c| c.path == rel);
-        if existing {
-            continue;
-        }
-        let _ = store.insert_checkpoint(&tiandi_core::Checkpoint {
-            id: uuid::Uuid::new_v4().to_string(),
-            run_id: run_id.to_string(),
-            kind: "lora".into(),
-            path: rel,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        });
-    }
+    files
 }
 
 /// 推进状态机：若非法（如 Preparing→Done 中间态缺失），沿合法路径补跳。
@@ -466,5 +550,140 @@ mod tests {
             cps[0].path
         );
     }
-}
 
+    #[tokio::test]
+    async fn sample_out_of_bounds_relative_path_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs_dir = tmp.path().join("runs");
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let st = state();
+        let run = Run::new(None, None, None, None);
+        {
+            let s = st.store.lock().await;
+            s.insert_run(&run).unwrap();
+            s.update_run_state(&run.id, RunState::Running, "t").unwrap();
+        }
+        handle_event(
+            &st.store,
+            &st.bus,
+            &runs_dir,
+            &runs_dir,
+            Event::Sample {
+                run_id: run.id.clone(),
+                path: "../escape.png".into(),
+            },
+        )
+        .await;
+        // 越界路径被跳过：不入库、不落盘
+        let cps = st.store.lock().await.list_checkpoints(&run.id).unwrap();
+        assert!(cps.is_empty(), "越界相对路径不应入库");
+        assert!(
+            !tmp.path().join("escape.png").exists(),
+            "不应在根外生成文件"
+        );
+    }
+
+    #[tokio::test]
+    async fn sample_absolute_out_of_bounds_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs_dir = tmp.path().join("runs");
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let outside = tmp.path().join("outside.png");
+        std::fs::write(&outside, b"x").unwrap();
+        let st = state();
+        let run = Run::new(None, None, None, None);
+        {
+            let s = st.store.lock().await;
+            s.insert_run(&run).unwrap();
+            s.update_run_state(&run.id, RunState::Running, "t").unwrap();
+        }
+        handle_event(
+            &st.store,
+            &st.bus,
+            &runs_dir,
+            &runs_dir,
+            Event::Sample {
+                run_id: run.id.clone(),
+                path: outside.to_string_lossy().into_owned(),
+            },
+        )
+        .await;
+        let cps = st.store.lock().await.list_checkpoints(&run.id).unwrap();
+        assert!(cps.is_empty(), "越界绝对路径不应入库");
+    }
+
+    #[tokio::test]
+    async fn done_scans_lora_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs_dir = tmp.path().join("runs");
+        let st = state();
+        let run = Run::new(None, None, None, None);
+        {
+            let s = st.store.lock().await;
+            s.insert_run(&run).unwrap();
+            s.update_run_state(&run.id, RunState::Running, "t").unwrap();
+        }
+        // 造产物：output_root/<id>/checkpoints/xxx.safetensors（此处 output_root = runs_dir）
+        let out = runs_dir.join(&run.id).join("checkpoints");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("lora-0001.safetensors"), b"x").unwrap();
+        handle_event(
+            &st.store,
+            &st.bus,
+            &runs_dir,
+            &runs_dir,
+            Event::Done {
+                run_id: run.id.clone(),
+                code: 0,
+            },
+        )
+        .await;
+        {
+            let s = st.store.lock().await;
+            assert_eq!(s.get_run(&run.id).unwrap().state, RunState::Done);
+            let cps = s.list_checkpoints(&run.id).unwrap();
+            assert_eq!(cps.len(), 1, "Done 应扫描并入库 LoRA 产物");
+            assert_eq!(cps[0].kind, "lora");
+            assert!(cps[0].path.ends_with("lora-0001.safetensors"));
+        }
+    }
+
+    #[tokio::test]
+    async fn log_rotates_when_over_5mb() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs_dir = tmp.path().join("runs");
+        let st = state();
+        let run = Run::new(None, None, None, None);
+        {
+            let s = st.store.lock().await;
+            s.insert_run(&run).unwrap();
+            s.update_run_state(&run.id, RunState::Running, "t").unwrap();
+        }
+        let log_path = runs_dir.join(&run.id).join("logs/training.log");
+        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        // 写入超过 5MB 的旧日志
+        let big = vec![b'x'; 5 * 1024 * 1024 + 1];
+        std::fs::write(&log_path, &big).unwrap();
+        handle_event(
+            &st.store,
+            &st.bus,
+            &runs_dir,
+            &runs_dir,
+            Event::Log {
+                run_id: run.id.clone(),
+                level: "info".into(),
+                msg: "旋转后的新日志".into(),
+            },
+        )
+        .await;
+        // 旧日志旋转为 .1，新日志写入 training.log
+        assert!(
+            log_path.with_extension("log.1").exists(),
+            "应旋转出 training.log.1"
+        );
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        assert!(content.contains("旋转后的新日志"));
+        let rotated = std::fs::read_to_string(log_path.with_extension("log.1")).unwrap();
+        assert_eq!(rotated.len(), big.len(), "旧日志应完整保留在 .1");
+    }
+}

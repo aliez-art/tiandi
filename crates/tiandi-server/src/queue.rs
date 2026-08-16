@@ -23,24 +23,18 @@ pub fn spawn(state: AppState) {
     });
 }
 
-/// 串行泵：无运行中任务时，拉起最早的 Queued 任务。
+/// 串行泵：无运行中任务时，原子认领最早的 Queued 任务并拉起内核。
 async fn try_pump(state: &AppState) {
+    // 事务内原子认领：无运行中任务 → 最早的 Queued 置 Preparing 并返回该 Run；
+    // 有运行中任务或无排队任务 → Ok(None)。取代"先查 has_running_run + list_queued_runs
+    // 再 start"的两步逻辑，杜绝并发认领竞态（claim 返回的 Run 状态已是 Preparing，
+    // supervisor 收到 hello 后再置 Preparing 是幂等 no-op）。
     let next = {
-        let store = state.store.lock().await;
-        let running = match store.has_running_run() {
+        let mut store = state.store.lock().await;
+        match store.claim_next_queued() {
             Ok(r) => r,
             Err(e) => {
-                warn!("队列检查失败：{e}");
-                return;
-            }
-        };
-        if running {
-            return;
-        }
-        match store.list_queued_runs() {
-            Ok(list) => list.into_iter().next(),
-            Err(e) => {
-                warn!("读取队列失败：{e}");
+                warn!("队列认领失败：{e}");
                 return;
             }
         }
@@ -210,7 +204,7 @@ pub async fn fail_run(state: &AppState, run_id: &str, reason: &str) {
     }
 }
 
-/// 崩溃恢复：启动时将中断态（Preparing/Running）任务置 Failed（可一键重试）。
+/// 崩溃恢复：启动时将中断态（Preparing/Running/Paused/Sampling/Saving）任务置 Failed（可一键重试）。
 async fn recover_interrupted(state: &AppState) {
     let store = state.store.lock().await;
     let runs = match store.list_runs() {
@@ -220,7 +214,11 @@ async fn recover_interrupted(state: &AppState) {
     for run in runs {
         if matches!(
             run.state,
-            RunState::Preparing | RunState::Running | RunState::Sampling | RunState::Saving
+            RunState::Preparing
+                | RunState::Running
+                | RunState::Paused
+                | RunState::Sampling
+                | RunState::Saving
         ) {
             let updated_at = chrono::Utc::now().to_rfc3339();
             if store
@@ -240,6 +238,89 @@ async fn recover_interrupted(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tiandi_core::{EventBus, Run};
+    use tiandi_state::Store;
+
+    /// 测试状态：wrapper 指向不存在的脚本（内核启动必然快速失败/退出，
+    /// 避免真实 mock 内核在单测中长时间运行）；不 spawn supervisor。
+    fn test_state(runs_dir: &std::path::Path) -> AppState {
+        let store = Store::open_in_memory().unwrap();
+        AppState::new(
+            store,
+            EventBus::default(),
+            runs_dir.to_path_buf(),
+            std::env::temp_dir().join("no-such-kernel_runner.py"),
+            true,
+        )
+    }
+
+    async fn insert_queued(state: &AppState, n: usize) -> Vec<Run> {
+        let mut runs = Vec::new();
+        let s = state.store.lock().await;
+        for _ in 0..n {
+            let r = Run::new(None, None, None, None);
+            s.insert_run(&r).unwrap();
+            s.update_run_state(&r.id, RunState::Queued, "t").unwrap();
+            runs.push(r);
+        }
+        runs
+    }
+
+    #[tokio::test]
+    async fn try_pump_blocks_when_another_run_in_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = test_state(tmp.path());
+        let running = Run::new(None, None, None, None);
+        let queued = Run::new(None, None, None, None);
+        {
+            let s = st.store.lock().await;
+            s.insert_run(&running).unwrap();
+            s.insert_run(&queued).unwrap();
+            s.update_run_state(&running.id, RunState::Running, "t")
+                .unwrap();
+            s.update_run_state(&queued.id, RunState::Queued, "t")
+                .unwrap();
+        }
+        // 有运行中任务 → 不得认领排队任务（原子守卫）
+        try_pump(&st).await;
+        let s = st.store.lock().await;
+        assert_eq!(s.get_run(&queued.id).unwrap().state, RunState::Queued);
+        assert_eq!(s.get_run(&running.id).unwrap().state, RunState::Running);
+    }
+
+    #[tokio::test]
+    async fn try_pump_claims_earliest_queued() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = test_state(tmp.path());
+        let runs = insert_queued(&st, 2).await;
+        // 无运行中任务 → 认领最早的 Queued（置 Preparing），并尝试拉起内核
+        try_pump(&st).await;
+        let s = st.store.lock().await;
+        let first = s.get_run(&runs[0].id).unwrap();
+        // 已离开 Queued：Preparing（认领成功，内核已启动）或 Failed（本机无 Python 启动失败）
+        assert!(
+            matches!(
+                first.state,
+                RunState::Preparing | RunState::Running | RunState::Failed
+            ),
+            "最早任务应被认领：{}",
+            first.state.label()
+        );
+        // 第二个任务保持 Queued（单次认领只取最早一个）
+        assert_eq!(s.get_run(&runs[1].id).unwrap().state, RunState::Queued);
+        drop(s);
+        // 清理可能残留的内核进程
+        st.trainer.kill_all();
+    }
+
+    #[tokio::test]
+    async fn try_pump_noop_with_empty_queue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = test_state(tmp.path());
+        try_pump(&st).await; // 空队列：不应 panic / 不应认领任何任务
+        let s = st.store.lock().await;
+        assert!(s.list_runs().unwrap().is_empty());
+    }
 
     #[test]
     fn resume_detects_latest_state_dir() {

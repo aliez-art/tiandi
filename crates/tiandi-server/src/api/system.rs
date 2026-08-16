@@ -2,7 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use axum::{extract::State, response::Json, routing::{get, post}, Router};
+use axum::{
+    extract::State,
+    response::Json,
+    routing::{get, post},
+    Router,
+};
 use serde::{Deserialize, Serialize};
 
 use super::ApiError;
@@ -51,7 +56,10 @@ async fn import_asset(
     };
     let src = std::path::PathBuf::from(&input.path);
     if !src.is_file() {
-        return Err(ApiError::BadRequest(format!("源文件不存在：{}", input.path)));
+        return Err(ApiError::BadRequest(format!(
+            "源文件不存在：{}",
+            input.path
+        )));
     }
     let file_name = src
         .file_name()
@@ -94,7 +102,7 @@ mod dialog_owner {
 
     use raw_window_handle::{
         DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
-        WindowHandle, Win32WindowHandle,
+        Win32WindowHandle, WindowHandle,
     };
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -106,8 +114,9 @@ mod dialog_owner {
 
     impl HasWindowHandle for WinHandle {
         fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-            let h =
-                Win32WindowHandle::new(NonZeroIsize::new(self.0 as isize).ok_or(HandleError::Unavailable)?);
+            let h = Win32WindowHandle::new(
+                NonZeroIsize::new(self.0 as isize).ok_or(HandleError::Unavailable)?,
+            );
             Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(h)) })
         }
     }
@@ -118,7 +127,12 @@ mod dialog_owner {
         }
     }
 
-    unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> isize {
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 
@@ -296,10 +310,11 @@ async fn update_settings(
     let store = state.store.lock().await;
     for (key, value) in &input.values {
         if value.is_empty() {
-            // 空值删除：直接跳过写入（保留简单语义，删除用空串）
-            continue;
+            // 空值 = 删除该键（实现注释承诺的语义）
+            store.delete_setting(key)?;
+        } else {
+            store.set_setting(key, value)?;
         }
-        store.set_setting(key, value)?;
     }
     Ok(Json(store.list_settings()?))
 }

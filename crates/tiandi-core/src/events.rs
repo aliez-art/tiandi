@@ -84,7 +84,8 @@ impl EventBus {
 
 impl Default for EventBus {
     fn default() -> Self {
-        Self::new(1024)
+        // 4096：高频进度/日志事件下避免环形缓冲过早淘汰（UI 回放/失败摘要用）
+        Self::new(4096)
     }
 }
 

@@ -25,6 +25,12 @@ export interface EventLine {
   data: string
 }
 
+/** 日志行（error=true 渲染为红色错误行，如 fail 事件）。 */
+interface LogEntry {
+  text: string
+  error: boolean
+}
+
 interface MetricEvent {
   step: number
   loss: number | null
@@ -66,16 +72,29 @@ export default function Console({ run, events }: ConsoleProps) {
     }
     return out
   }, [runEvents])
-  const liveLogs = useMemo(() => runEvents
-    .filter((e) => e.type === 'log')
-    .map((e) => {
-      try {
-        const v = JSON.parse(e.data) as { msg?: string; level?: string }
-        return `[${v.level ?? 'info'}] ${v.msg ?? ''}`
-      } catch {
-        return e.data
+  // 实时日志：log 事件 + fail 事件（tail 摘要渲染为红色错误行）
+  const liveLogs = useMemo(() => {
+    const out: LogEntry[] = []
+    for (const e of runEvents) {
+      if (e.type === 'log') {
+        try {
+          const v = JSON.parse(e.data) as { msg?: string; level?: string }
+          out.push({ text: `[${v.level ?? 'info'}] ${v.msg ?? ''}`, error: false })
+        } catch {
+          out.push({ text: e.data, error: false })
+        }
+      } else if (e.type === 'fail') {
+        try {
+          const v = JSON.parse(e.data) as { tail?: string; code?: number }
+          const tail = (v.tail ?? '').trim()
+          out.push({ text: tail ? `[失败] ${tail}` : e.data, error: true })
+        } catch {
+          out.push({ text: e.data, error: true })
+        }
       }
-    }), [runEvents])
+    }
+    return out
+  }, [runEvents])
 
   // 历史数据（切换任务时加载）
   const [historyMetrics, setHistoryMetrics] = useState<MetricPoint[]>([])
@@ -87,6 +106,8 @@ export default function Console({ run, events }: ConsoleProps) {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const logBoxRef = useRef<HTMLDivElement>(null)
+  /** 采样事件后刷新药库的防抖计时器（1s） */
+  const checkpointTimer = useRef<number | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -124,9 +145,19 @@ export default function Console({ run, events }: ConsoleProps) {
     setLatestStep(step)
     setTotalSteps(total)
     setLatestLoss(loss)
-    // 采样事件后刷新药库
+    // 采样事件后防抖刷新药库（1s），避免连续 sample 事件重复拉取
     if (runEvents.some((e) => e.type === 'sample')) {
-      void listCheckpoints(run.id).then(setCheckpoints).catch(() => {})
+      if (checkpointTimer.current !== null) window.clearTimeout(checkpointTimer.current)
+      checkpointTimer.current = window.setTimeout(() => {
+        checkpointTimer.current = null
+        void listCheckpoints(run.id).then(setCheckpoints).catch(() => {})
+      }, 1000)
+    }
+    return () => {
+      if (checkpointTimer.current !== null) {
+        window.clearTimeout(checkpointTimer.current)
+        checkpointTimer.current = null
+      }
     }
   }, [runEvents, run.id])
 
@@ -149,7 +180,10 @@ export default function Console({ run, events }: ConsoleProps) {
     return [...map.values()].sort((a, b) => a.step - b.step)
   }, [historyMetrics, liveMetrics])
 
-  const allLogs = useMemo(() => [...historyLogs, ...liveLogs], [historyLogs, liveLogs])
+  const allLogs = useMemo<LogEntry[]>(
+    () => [...historyLogs.map((l) => ({ text: l, error: false })), ...liveLogs],
+    [historyLogs, liveLogs],
+  )
 
   const pct = totalSteps && totalSteps > 0 ? Math.min(100, (latestStep / totalSteps) * 100) : 0
 
@@ -201,7 +235,15 @@ export default function Console({ run, events }: ConsoleProps) {
     <div className="console">
       {/* 火候仪表盘 */}
       <section className="panel gauge">
-        <div className="gauge-ring" style={{ '--pct': `${pct}%` } as React.CSSProperties}>
+        <div
+          className="gauge-ring"
+          style={{ '--pct': `${pct}%` } as React.CSSProperties}
+          role="progressbar"
+          aria-label="训练进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(pct)}
+        >
           <div className="gauge-inner">
             <div className="gauge-pct">{Math.round(pct)}%</div>
             <div className="gauge-sub">{latestStep}{totalSteps ? ` / ${totalSteps}` : ''} 步</div>
@@ -234,7 +276,7 @@ export default function Console({ run, events }: ConsoleProps) {
               )}
             </div>
           )}
-          {opError && <p className="status-line">{opError}</p>}
+          {opError && <p className="status-line error">{opError}</p>}
         </div>
       </section>
 
@@ -306,7 +348,9 @@ export default function Console({ run, events }: ConsoleProps) {
           {allLogs.length === 0 ? (
             <p className="hint">等待日志…</p>
           ) : (
-            allLogs.map((l, i) => <div key={i} className="logline">{l}</div>)
+            allLogs.map((l, i) => (
+              <div key={i} className={`logline${l.error ? ' log-error' : ''}`}>{l.text}</div>
+            ))
           )}
         </div>
       </section>

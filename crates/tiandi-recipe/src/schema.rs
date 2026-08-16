@@ -230,6 +230,19 @@ pub struct RecipeData {
     pub trigger_word: Option<String>,
     /// 预测目标（None = 随模型/后端默认；v 预测模型需显式指定 "v"）
     pub prediction_type: Option<PredictionType>,
+    // ---- 前端附属字段（TrainSetup.tsx 等把路径/开关存入 recipe.data）----
+    // 这些字段仅被 schema 识别以保持向前兼容（旧丹方无这些键也能解析）；
+    // 路径实际由 TrainJob 提供，toml_map/yaml_map 不消费它们。
+    /// 基底模型路径（前端存储；服务端以 TrainJob.base_model 为准）
+    pub model_path: Option<String>,
+    /// VAE 路径（前端存储；服务端以 TrainJob/内核探测为准）
+    pub vae_path: Option<String>,
+    /// 文本编码器路径（前端存储；服务端以 TrainJob/内核探测为准）
+    pub te_path: Option<String>,
+    /// 数据集目录（前端存储；服务端以 TrainJob.dataset_dir 为准）
+    pub dataset_dir: Option<String>,
+    /// 全量微调标记（前端存储；服务端以 TrainJob.params.full_finetune 为准）
+    pub full_finetune: Option<bool>,
 }
 
 impl Default for RecipeData {
@@ -289,6 +302,11 @@ impl Default for RecipeData {
             block_weights: None,
             trigger_word: None,
             prediction_type: None,
+            model_path: None,
+            vae_path: None,
+            te_path: None,
+            dataset_dir: None,
+            full_finetune: None,
         }
     }
 }
@@ -340,5 +358,42 @@ mod tests {
             "\"dora\""
         );
         assert_eq!(serde_json::to_string(&Precision::Bf16).unwrap(), "\"bf16\"");
+    }
+
+    #[test]
+    fn custom_ui_fields_are_optional_and_roundtrip() {
+        // 旧丹方（无这些键）仍可解析，字段为 None
+        let json = r#"{"learning_rate": 2e-4}"#;
+        let d: RecipeData = serde_json::from_str(json).unwrap();
+        assert_eq!(d.model_path, None);
+        assert_eq!(d.vae_path, None);
+        assert_eq!(d.te_path, None);
+        assert_eq!(d.dataset_dir, None);
+        assert_eq!(d.full_finetune, None);
+
+        // 新丹方：前端存入的附属字段被识别
+        let json = r#"{
+            "learning_rate": 2e-4,
+            "model_path": "D:/models/base.safetensors",
+            "vae_path": "D:/models/vae.safetensors",
+            "te_path": "D:/models/te",
+            "dataset_dir": "D:/ds",
+            "full_finetune": true
+        }"#;
+        let d: RecipeData = serde_json::from_str(json).unwrap();
+        assert_eq!(d.model_path.as_deref(), Some("D:/models/base.safetensors"));
+        assert_eq!(d.vae_path.as_deref(), Some("D:/models/vae.safetensors"));
+        assert_eq!(d.te_path.as_deref(), Some("D:/models/te"));
+        assert_eq!(d.dataset_dir.as_deref(), Some("D:/ds"));
+        assert_eq!(d.full_finetune, Some(true));
+
+        // 序列化往返保留这些字段
+        let roundtrip: RecipeData =
+            serde_json::from_value(serde_json::to_value(&d).unwrap()).unwrap();
+        assert_eq!(roundtrip.full_finetune, Some(true));
+        assert_eq!(
+            roundtrip.model_path.as_deref(),
+            Some("D:/models/base.safetensors")
+        );
     }
 }

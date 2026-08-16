@@ -288,7 +288,10 @@ def main():
         "text_encoder": os.path.join(out_root, "qwen3vl_4b").replace("\\", "/"),
         "vae_root": out_root.replace("\\", "/"),
     }
-    print(json.dumps(manifest, ensure_ascii=False))
+    # UTF-8 字节直写 stdout：不经过 locale 编码器（Windows 管道默认 GBK，
+    # 中文路径会乱码），Rust 侧按 UTF-8 解析（参考 kernel_runner.py emit()）。
+    sys.stdout.buffer.write((json.dumps(manifest, ensure_ascii=False) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
     print("Krea 2 资产准备完成 OK")
 
 

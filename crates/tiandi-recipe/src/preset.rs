@@ -216,4 +216,3 @@ mod tests {
         assert!(families.contains(&ModelFamily::DitKrea2));
     }
 }
-

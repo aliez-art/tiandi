@@ -105,14 +105,15 @@ Rust 侧（tiandi-engine-compat）            Python 内核（受管子进程）
 {"cmd":"query"}     // 请求立即补发 progress/heartbeat（UI 重连恢复）
 ```
 
-- `cancel` 两段式：先发命令等 30s，未退则 Job Object 杀进程树（参考 kohya_ss CommandExecutor / lora-scripts-next kill-tree）；P1 起内核侧支持训练中 `SIGINT` 优雅保存（写 state + 退出）以实现**训练侧暂停/续训**。
+- `cancel` 两段式：先发命令等 10s，未退则 taskkill /T /F 杀进程树；`pause`/`resume` 为预留命令（当前引擎返回 Unsupported，训练侧暂停列入后续里程碑）。
 
 ### 5.4 可靠性设计
 
-- **握手**：`hello` 必须在启动后 10s 内到达，内容（backend/commit/torch 版本）与锁定清单比对，不匹配即拒绝继续（防"换了个内核跑"）。
-- **心跳**：内核 ≥2s 一条 heartbeat；Rust 侧超时 30s 判定卡死（显存溢出挂起等），UI 提示并提供"看门狗"选项（自动 kill + 失败摘要）——参考 lora-scripts-next 的卡死检测。
-- **冗余通道**：采样图/checkpoint/state 由内核直接落盘（`notify` crate 监听任务目录），事件流断线/崩溃后产物仍在，UI 可扫描恢复。
-- **失败语义**：非零退出码 + `fail.tail` 摘要（末 2KB 日志）入任务历史；日志分片滚动防撑爆磁盘。
+- **心跳与卡死检测（已实现）**：内核（sd-scripts/ai-toolkit 模式）每 2s 发一条 `heartbeat`；Rust 侧看门狗每 5s 检查，距上次内核输出超过 30s 判定卡死（显存溢出挂起等），自动强制终止并上报失败摘要。
+- **握手**：`hello` 事件在启动时上报（backend/version），后续可按锁定清单扩展比对（当前未强制）。
+- **冗余通道**：采样图/checkpoint/state 由内核直接落盘；真实训练中采样图由内核侧目录监控自动上报 `sample` 事件（mock 与真实模式均已接通）；产物路径越界（`..`/绝对路径逃逸）会被拒绝入库。
+- **失败语义**：非零退出码 + `fail.tail` 摘要（末 2KB 日志）入任务历史并红显于 UI 日志流；日志文件超过 5MB 自动轮转为 `.log.1`。
+- **队列可靠性**：任务原子认领（`BEGIN IMMEDIATE` 事务，杜绝重复拉起）；取消先置 Canceled 再终止内核（取消不会再显示为"炸炉"）；崩溃恢复覆盖 Paused；服务优雅关停时终止全部内核进程。
 
 ### 5.5 内核版本锁定
 

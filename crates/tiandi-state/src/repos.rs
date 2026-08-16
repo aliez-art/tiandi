@@ -2,7 +2,7 @@
 //!
 //! 领域实体 ↔ 行映射集中在各 repo 方法内；`Store` 持有连接并提供事务边界。
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use tiandi_core::{
     BaseModel, Checkpoint, Dataset, MetricPoint, ModelFamily, Project, Recipe, Run, RunState,
@@ -44,6 +44,12 @@ fn parse_run_state(s: &str) -> RunState {
         serde_json::from_str(&format!("\"{s}\"")).unwrap_or(RunState::Created)
     }
 }
+
+/// 运行中状态集合（含旧格式带引号变体），供 `has_running_run` / `claim_next_queued` 复用。
+const RUNNING_STATES_SQL: &str = r#"'preparing','running','sampling','saving','paused','"preparing"','"running"','"sampling"','"saving"','"paused"'"#;
+
+/// 排队状态集合（含旧格式带引号变体）。
+const QUEUED_STATES_SQL: &str = r#"'queued','"queued"'"#;
 
 /// 数据存储（SQLite 连接 + 各仓储方法）。
 pub struct Store {
@@ -262,19 +268,18 @@ impl Store {
             })
     }
 
-    /// 删除数据集记录及图像索引（不存在则 NotFound）。
+    /// 删除数据集记录及图像索引（不存在则 NotFound；事务内执行，出错整体回滚）。
     pub fn delete_dataset(&self, id: &str) -> Result<(), RepoError> {
-        self.conn
-            .execute("DELETE FROM image_files WHERE dataset_id = ?1", [id])?;
-        let n = self
-            .conn
-            .execute("DELETE FROM datasets WHERE id = ?1", [id])?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM image_files WHERE dataset_id = ?1", [id])?;
+        let n = tx.execute("DELETE FROM datasets WHERE id = ?1", [id])?;
         if n == 0 {
             return Err(RepoError::NotFound {
                 entity: "dataset",
                 id: id.into(),
             });
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -296,7 +301,8 @@ impl Store {
         Ok(())
     }
 
-    pub fn get_recipe(&self, id: &str) -> Result<Recipe, RepoError> {        let row = self
+    pub fn get_recipe(&self, id: &str) -> Result<Recipe, RepoError> {
+        let row = self
             .conn
             .query_row(
                 "SELECT id, name, family, data, created_at FROM recipes WHERE id = ?1",
@@ -365,33 +371,33 @@ impl Store {
         Ok(out)
     }
 
-    /// 删除丹方（不存在则 NotFound）。
+    /// 删除丹方（不存在则 NotFound；事务内执行，出错整体回滚）。
     pub fn delete_recipe(&self, id: &str) -> Result<(), RepoError> {
-        let n = self
-            .conn
-            .execute("DELETE FROM recipes WHERE id = ?1", [id])?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let n = tx.execute("DELETE FROM recipes WHERE id = ?1", [id])?;
         if n == 0 {
             return Err(RepoError::NotFound {
                 entity: "recipe",
                 id: id.into(),
             });
         }
+        tx.commit()?;
         Ok(())
     }
 
-    /// 删除任务记录及关联指标/产物索引（不存在则 NotFound）。
+    /// 删除任务记录及关联指标/产物索引（不存在则 NotFound；事务内执行，出错整体回滚）。
     pub fn delete_run(&self, id: &str) -> Result<(), RepoError> {
-        self.conn
-            .execute("DELETE FROM metrics WHERE run_id = ?1", [id])?;
-        self.conn
-            .execute("DELETE FROM checkpoints WHERE run_id = ?1", [id])?;
-        let n = self.conn.execute("DELETE FROM runs WHERE id = ?1", [id])?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM metrics WHERE run_id = ?1", [id])?;
+        tx.execute("DELETE FROM checkpoints WHERE run_id = ?1", [id])?;
+        let n = tx.execute("DELETE FROM runs WHERE id = ?1", [id])?;
         if n == 0 {
             return Err(RepoError::NotFound {
                 entity: "run",
                 id: id.into(),
             });
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -463,12 +469,12 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// 排队中的任务（按创建时间升序）。
+    /// 排队中的任务（按创建时间升序；兼容旧格式带引号状态值）。
     pub fn list_queued_runs(&self) -> Result<Vec<Run>, RepoError> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at
-             FROM runs WHERE state = 'queued' ORDER BY created_at ASC",
-        )?;
+             FROM runs WHERE state IN ({QUEUED_STATES_SQL}) ORDER BY created_at ASC"
+        ))?;
         let rows = stmt.query_map([], |row| {
             let state: String = row.get(5)?;
             Ok(Run {
@@ -486,14 +492,68 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// 是否有任务正在运行（Preparing/Running/Sampling/Saving/Paused）。
+    /// 是否有任务正在运行（Preparing/Running/Sampling/Saving/Paused；兼容旧格式带引号状态值）。
     pub fn has_running_run(&self) -> Result<bool, RepoError> {
         let n: i64 = self.conn.query_row(
-            "SELECT count(*) FROM runs WHERE state IN ('preparing','running','sampling','saving','paused')",
+            &format!("SELECT count(*) FROM runs WHERE state IN ({RUNNING_STATES_SQL})"),
             [],
             |row| row.get(0),
         )?;
         Ok(n > 0)
+    }
+
+    /// 原子认领最早的 Queued 任务（BEGIN IMMEDIATE 事务内：无运行中任务 → 选中 → 置 Preparing）。
+    /// 返回被认领的 Run；无排队任务或有运行中任务时返回 Ok(None)。
+    pub fn claim_next_queued(&mut self) -> Result<Option<Run>, RepoError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        // 同一事务内先判定是否有运行中任务，避免并发认领竞态
+        let running: i64 = tx.query_row(
+            &format!("SELECT count(*) FROM runs WHERE state IN ({RUNNING_STATES_SQL})"),
+            [],
+            |row| row.get(0),
+        )?;
+        if running > 0 {
+            tx.commit()?;
+            return Ok(None);
+        }
+        let row = tx
+            .query_row(
+                &format!(
+                    "SELECT id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at
+                     FROM runs WHERE state IN ({QUEUED_STATES_SQL}) ORDER BY created_at ASC LIMIT 1"
+                ),
+                [],
+                |row| {
+                    let state: String = row.get(5)?;
+                    Ok(Run {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        dataset_id: row.get(2)?,
+                        recipe_id: row.get(3)?,
+                        base_model_id: row.get(4)?,
+                        state: parse_run_state(&state),
+                        manifest_path: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(run) = row else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        // 事务内置 Preparing 并写回 updated_at（沿用认领前原值，保持时间戳格式一致），随后整体提交
+        let n = tx.execute(
+            "UPDATE runs SET state = 'preparing', updated_at = ?1 WHERE id = ?2",
+            params![run.updated_at, run.id],
+        )?;
+        debug_assert_eq!(n, 1, "被认领的行应恰好更新一行");
+        tx.commit()?;
+        Ok(Some(Run {
+            state: RunState::Preparing,
+            ..run
+        }))
     }
 
     /// 更新任务状态与 updated_at（事务内）。
@@ -640,7 +700,9 @@ impl Store {
                    WHERE run_id = c.run_id AND kind = 'sample'
                )",
         )?;
-        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -661,6 +723,13 @@ impl Store {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )?;
+        Ok(())
+    }
+
+    /// 删除设置项（不存在也视为成功；供“空值即删除”语义使用）。
+    pub fn delete_setting(&self, key: &str) -> Result<(), RepoError> {
+        self.conn
+            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
         Ok(())
     }
 
@@ -904,5 +973,138 @@ mod tests {
         s.replace_dataset_images(&d.id, &[]).unwrap();
         assert_eq!(s.count_dataset_images(&d.id).unwrap(), 0);
         assert_eq!(s.list_dataset_images(&d.id).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn legacy_quoted_state_visible_to_queue_queries() {
+        let s = store();
+        // 旧格式：状态以带引号 JSON 字符串落库（parse_run_state 兼容，查询须匹配两种格式）
+        s.conn()
+            .execute(
+                "INSERT INTO runs (id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at)
+                 VALUES ('legacy1', NULL, NULL, NULL, NULL, '\"queued\"', NULL, 't1', 't1')",
+                [],
+            )
+            .unwrap();
+        let r = Run::new(None, None, None, None);
+        s.insert_run(&r).unwrap();
+        s.update_run_state(&r.id, RunState::Queued, "t2").unwrap();
+
+        assert_eq!(s.list_queued_runs().unwrap().len(), 2);
+        assert!(!s.has_running_run().unwrap());
+
+        // 旧格式 running 变体也应被 has_running_run 识别
+        s.conn()
+            .execute(
+                "UPDATE runs SET state = '\"running\"' WHERE id = 'legacy1'",
+                [],
+            )
+            .unwrap();
+        assert!(s.has_running_run().unwrap());
+        assert_eq!(s.list_queued_runs().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn claim_next_queued_picks_earliest_and_blocks_when_running() {
+        let mut s = store();
+        let mut r1 = Run::new(None, None, None, None);
+        let mut r2 = Run::new(None, None, None, None);
+        r1.created_at = "2024-01-01T00:00:00+00:00".into();
+        r1.updated_at = r1.created_at.clone();
+        r2.created_at = "2024-01-02T00:00:00+00:00".into();
+        r2.updated_at = r2.created_at.clone();
+        s.insert_run(&r1).unwrap();
+        s.insert_run(&r2).unwrap();
+        s.update_run_state(&r1.id, RunState::Queued, "2024-01-03T00:00:00+00:00")
+            .unwrap();
+        s.update_run_state(&r2.id, RunState::Queued, "2024-01-04T00:00:00+00:00")
+            .unwrap();
+
+        // 最早创建的先认领，且状态置 Preparing
+        let claimed = s.claim_next_queued().unwrap().unwrap();
+        assert_eq!(claimed.id, r1.id);
+        assert_eq!(claimed.state, RunState::Preparing);
+        assert_eq!(s.get_run(&r1.id).unwrap().state, RunState::Preparing);
+
+        // 有运行中任务时不再认领，排队任务保持原状
+        s.update_run_state(&r1.id, RunState::Running, "2024-01-05T00:00:00+00:00")
+            .unwrap();
+        assert!(s.claim_next_queued().unwrap().is_none());
+        assert_eq!(s.get_run(&r2.id).unwrap().state, RunState::Queued);
+
+        // 运行中任务结束后（Done），可继续认领下一个排队任务
+        s.update_run_state(&r1.id, RunState::Done, "2024-01-06T00:00:00+00:00")
+            .unwrap();
+        let claimed2 = s.claim_next_queued().unwrap().unwrap();
+        assert_eq!(claimed2.id, r2.id);
+        assert_eq!(claimed2.state, RunState::Preparing);
+
+        // 全部认领完后无排队任务，返回 None
+        assert!(s.claim_next_queued().unwrap().is_none());
+    }
+
+    #[test]
+    fn claim_next_queued_accepts_legacy_quoted_state() {
+        let mut s = store();
+        s.conn()
+            .execute(
+                "INSERT INTO runs (id, project_id, dataset_id, recipe_id, base_model_id, state, manifest_path, created_at, updated_at)
+                 VALUES ('legacy1', NULL, NULL, NULL, NULL, '\"queued\"', NULL, 't1', 't1')",
+                [],
+            )
+            .unwrap();
+        let claimed = s.claim_next_queued().unwrap().unwrap();
+        assert_eq!(claimed.id, "legacy1");
+        assert_eq!(claimed.state, RunState::Preparing);
+        assert_eq!(s.get_run("legacy1").unwrap().state, RunState::Preparing);
+    }
+
+    #[test]
+    fn delete_dataset_recipe_run_not_found_keeps_data() {
+        let s = store();
+        let d = Dataset::new("测试集", "D:\\ds");
+        s.insert_dataset(&d).unwrap();
+        let err = s.delete_dataset("nope").unwrap_err();
+        assert!(matches!(err, RepoError::NotFound { .. }));
+        assert_eq!(s.list_datasets().unwrap().len(), 1);
+
+        let r = Recipe::new("入门", ModelFamily::DitAnima, serde_json::json!({}));
+        s.insert_recipe(&r).unwrap();
+        let err = s.delete_recipe("nope").unwrap_err();
+        assert!(matches!(err, RepoError::NotFound { .. }));
+        assert_eq!(s.list_recipes().unwrap().len(), 1);
+
+        let run = Run::new(None, None, None, None);
+        s.insert_run(&run).unwrap();
+        let err = s.delete_run("nope").unwrap_err();
+        assert!(matches!(err, RepoError::NotFound { .. }));
+        assert_eq!(s.list_runs().unwrap().len(), 1);
+
+        // 正常删除成功（含关联 metrics/checkpoints 一并清理）
+        let m = MetricPoint {
+            run_id: run.id.clone(),
+            step: 1,
+            loss: Some(0.5),
+            lr: None,
+        };
+        s.insert_metric(&m).unwrap();
+        s.delete_run(&run.id).unwrap();
+        assert!(s.list_runs().unwrap().is_empty());
+        assert!(s.list_metrics(&run.id).unwrap().is_empty());
+        s.delete_dataset(&d.id).unwrap();
+        s.delete_recipe(&r.id).unwrap();
+        assert!(s.list_datasets().unwrap().is_empty());
+        assert!(s.list_recipes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_delete() {
+        let s = store();
+        s.set_setting("k", "v").unwrap();
+        assert_eq!(s.get_setting("k").unwrap().as_deref(), Some("v"));
+        s.delete_setting("k").unwrap();
+        assert_eq!(s.get_setting("k").unwrap(), None);
+        // 0 行也算成功
+        s.delete_setting("missing").unwrap();
     }
 }

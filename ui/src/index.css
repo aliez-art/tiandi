@@ -10,6 +10,7 @@
   --amber: #d4a24e;
   --celadon: #7fb5a0;
   --line: #33364a;
+  --error: #9e3125; /* 失败错误红（朱砂变暗），用于任务失败/错误日志/错误消息 */
 }
 
 * { box-sizing: border-box; }
@@ -39,6 +40,7 @@ body {
 .status .ok { color: var(--celadon); }
 .status .err { color: var(--cinnabar); }
 .status .connecting { color: var(--amber); }
+.status .retrying { color: var(--amber); }
 
 .layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
 .layout-single { display: block; }
@@ -100,7 +102,7 @@ button.secondary { background: var(--bg-elev); color: var(--ink); border: 1px so
 .run.active { border-left-color: var(--amber); background: #2a2d3d; }
 .run.done { border-left-color: var(--celadon); }
 .run.running { border-left-color: var(--cinnabar); }
-.run.failed { border-left-color: var(--cinnabar); filter: brightness(0.85); }
+.run.failed { border-left-color: var(--error); background: #251a1d; filter: brightness(0.92); }
 
 .run-id { font-family: monospace; color: var(--ink-dim); }
 .run-state { color: var(--amber); font-weight: 600; }
@@ -152,7 +154,7 @@ button.secondary { background: var(--bg-elev); color: var(--ink); border: 1px so
 }
 .state-pill.running { color: var(--cinnabar); border-color: var(--cinnabar); }
 .state-pill.done { color: var(--celadon); border-color: var(--celadon); }
-.state-pill.failed { color: var(--cinnabar); }
+.state-pill.failed { color: var(--error); border-color: var(--error); background: rgba(158, 49, 37, 0.18); }
 .state-pill.queued, .state-pill.preparing { color: var(--amber); border-color: var(--amber); }
 
 /* ---- 曲线 ---- */
@@ -218,6 +220,8 @@ button.secondary { background: var(--bg-elev); color: var(--ink); border: 1px so
 }
 
 .logline { color: var(--ink); line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+/* 失败事件（fail）渲染的红色错误日志行 */
+.logline.log-error { color: #ff8a80; background: rgba(158, 49, 37, 0.25); border-radius: 3px; padding: 0 4px; }
 
 footer {
   margin-top: 28px;
@@ -323,12 +327,14 @@ textarea {
 .preset-name { font-weight: 600; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .family-pill { font-size: 11px; color: var(--celadon); border: 1px solid var(--celadon); border-radius: 99px; padding: 1px 8px; white-space: nowrap; }
 .status-line { color: var(--amber); font-size: 12px; }
+.status-line.error { color: #ff8a80; }
 
 /* 任务删除按钮（终态任务 hover 显示） */
 .run { position: relative; }
 .run-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--ink-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
 .run-del:hover { color: var(--cinnabar); background: rgba(199, 68, 46, 0.15); }
-.run-del:hover { color: var(--cinnabar); background: rgba(199, 68, 46, 0.15); }
+.run-del:disabled { opacity: 0.35; cursor: not-allowed; }
+.run-del:disabled:hover { color: var(--ink-dim); background: transparent; }
 
 /* 分区表单 */
 .form-sec { border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 6px; }

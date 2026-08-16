@@ -86,6 +86,47 @@ pub fn validate_recipe(family: ModelFamily, data: &RecipeData) -> Vec<RecipeIssu
             format!("network_alpha {} 超出范围 [1, 512]", data.network_alpha),
         );
     }
+    // 网络 dropout 类：比例必须在 [0, 1]
+    for (field, value) in [
+        ("network_dropout", data.network_dropout),
+        ("rank_dropout", data.rank_dropout),
+        ("module_dropout", data.module_dropout),
+    ] {
+        if let Some(v) = value {
+            if !(0.0..=1.0).contains(&v) {
+                issue(
+                    IssueLevel::Error,
+                    field,
+                    format!("{field} {v} 超出范围 [0, 1]"),
+                );
+            }
+        }
+    }
+    // block_weights：SDXL 25 值逗号分隔数字（与 schema 注释一致）
+    if let Some(bw) = &data.block_weights {
+        let parts: Vec<&str> = bw.split(',').map(str::trim).collect();
+        let parseable = parts.len() == 25 && parts.iter().all(|p| p.parse::<f64>().is_ok());
+        if !parseable {
+            issue(
+                IssueLevel::Error,
+                "block_weights",
+                format!(
+                    "block_weights 必须是 25 个逗号分隔数字（当前 {} 段，解析失败）：{bw}",
+                    parts.len()
+                ),
+            );
+        }
+    }
+    // max_token_length：sd-scripts 仅支持 75/150/225/300
+    if let Some(v) = data.max_token_length {
+        if ![75, 150, 225, 300].contains(&v) {
+            issue(
+                IssueLevel::Error,
+                "max_token_length",
+                format!("max_token_length {v} 必须为 75/150/225/300 之一"),
+            );
+        }
+    }
     // 族约束：block_weights 仅 SDXL 族
     if data.block_weights.is_some() && family != ModelFamily::Sdxl1 {
         issue(
@@ -142,6 +183,72 @@ pub fn validate_recipe(family: ModelFamily, data: &RecipeData) -> Vec<RecipeIssu
             "resolution",
             format!("分辨率 {} 超出范围 [256, 4096]", data.resolution),
         );
+    }
+    // 数据集重复次数 ≥ 1
+    if let Some(v) = data.num_repeats {
+        if v < 1 {
+            issue(
+                IssueLevel::Error,
+                "num_repeats",
+                format!("num_repeats {v} 必须 ≥ 1"),
+            );
+        }
+    }
+    // 时间步裁剪：min ≤ max
+    if let (Some(min), Some(max)) = (data.min_timestep, data.max_timestep) {
+        if min > max {
+            issue(
+                IssueLevel::Error,
+                "min_timestep",
+                format!("min_timestep {min} 大于 max_timestep {max}"),
+            );
+        }
+    }
+    // 保存步数 > 0（0 表示关闭，但显式 Some(0) 视为配置错误）
+    if let Some(v) = data.save_every_n_steps {
+        if v == 0 {
+            issue(
+                IssueLevel::Error,
+                "save_every_n_steps",
+                "save_every_n_steps 必须 > 0（0 表示关闭，请省略该字段）".into(),
+            );
+        }
+    }
+
+    // ---- 质量技巧数值范围 ----
+    if let Some(v) = data.min_snr_gamma {
+        if v <= 0.0 {
+            issue(
+                IssueLevel::Error,
+                "min_snr_gamma",
+                format!("min_snr_gamma {v} 必须 > 0"),
+            );
+        }
+    }
+    if let Some(v) = data.adaptive_noise_scale {
+        if v <= 0.0 {
+            issue(
+                IssueLevel::Error,
+                "adaptive_noise_scale",
+                format!("adaptive_noise_scale {v} 必须 > 0"),
+            );
+        }
+    }
+    if data.max_grad_norm <= 0.0 {
+        issue(
+            IssueLevel::Error,
+            "max_grad_norm",
+            format!("max_grad_norm {} 必须 > 0", data.max_grad_norm),
+        );
+    }
+    if let Some(v) = data.caption_dropout_rate {
+        if !(0.0..=1.0).contains(&v) {
+            issue(
+                IssueLevel::Error,
+                "caption_dropout_rate",
+                format!("caption_dropout_rate {v} 超出范围 [0, 1]"),
+            );
+        }
     }
 
     // ---- 调度 ----
@@ -248,5 +355,129 @@ mod tests {
         d.mixed_precision = crate::schema::Precision::Fp16;
         let issues = validate_recipe(ModelFamily::DitAnima, &d);
         assert!(issues.iter().any(|i| i.field == "mixed_precision"));
+    }
+
+    #[test]
+    fn caption_dropout_rate_out_of_range_is_error() {
+        let data = RecipeData {
+            caption_dropout_rate: Some(1.5),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| { i.field == "caption_dropout_rate" && i.level == IssueLevel::Error }));
+    }
+
+    #[test]
+    fn min_timestep_above_max_is_error() {
+        let data = RecipeData {
+            min_timestep: Some(900),
+            max_timestep: Some(100),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| { i.field == "min_timestep" && i.level == IssueLevel::Error }));
+    }
+
+    #[test]
+    fn block_weights_wrong_arity_is_error() {
+        let data = RecipeData {
+            block_weights: Some("1,2".into()),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| { i.field == "block_weights" && i.level == IssueLevel::Error }));
+        // 25 值合法（SDXL 允许）
+        let ok = RecipeData {
+            block_weights: Some("1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1".into()),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &ok);
+        assert!(!issues.iter().any(|i| i.field == "block_weights"));
+    }
+
+    #[test]
+    fn num_repeats_zero_is_error() {
+        let data = RecipeData {
+            num_repeats: Some(0),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "num_repeats" && i.level == IssueLevel::Error));
+    }
+
+    #[test]
+    fn dropout_rates_out_of_range_are_errors() {
+        let data = RecipeData {
+            network_dropout: Some(1.2),
+            rank_dropout: Some(-0.1),
+            module_dropout: Some(0.5),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "network_dropout" && i.level == IssueLevel::Error));
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "rank_dropout" && i.level == IssueLevel::Error));
+        assert!(!issues.iter().any(|i| i.field == "module_dropout"));
+    }
+
+    #[test]
+    fn max_token_length_restricted_values() {
+        let data = RecipeData {
+            max_token_length: Some(200),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "max_token_length" && i.level == IssueLevel::Error));
+        let ok = RecipeData {
+            max_token_length: Some(225),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &ok);
+        assert!(!issues.iter().any(|i| i.field == "max_token_length"));
+    }
+
+    #[test]
+    fn positive_quality_numbers_checked() {
+        let data = RecipeData {
+            min_snr_gamma: Some(-1.0),
+            adaptive_noise_scale: Some(0.0),
+            max_grad_norm: -0.5,
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "min_snr_gamma" && i.level == IssueLevel::Error));
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "adaptive_noise_scale" && i.level == IssueLevel::Error));
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "max_grad_norm" && i.level == IssueLevel::Error));
+    }
+
+    #[test]
+    fn save_every_n_steps_zero_is_error() {
+        let data = RecipeData {
+            save_every_n_steps: Some(0),
+            ..RecipeData::default()
+        };
+        let issues = validate_recipe(ModelFamily::Sdxl1, &data);
+        assert!(issues
+            .iter()
+            .any(|i| i.field == "save_every_n_steps" && i.level == IssueLevel::Error));
     }
 }

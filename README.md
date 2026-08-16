@@ -18,9 +18,10 @@
 | 架构设计（v1.1） | ✅ `docs/architecture.md`（含 IPC/Stdio 协议细节） |
 | 里程碑路线图 | ✅ `docs/roadmap.md`（M0–M3 + 远期探索） |
 | 模型支持矩阵 | ✅ `docs/model-support.md` |
-| **M0 全部完成** | ✅ core/state/server/cli/engine + Tauri 2 壳 + React 前端（31 测试全绿 + clippy 0 警告 + 冒烟通过） |
+| **M0–M3 全部完成** | ✅ core/state/server/cli/engine + Tauri 2 壳 + React 前端（132 测试全绿 + clippy 0 警告 + fmt 通过 + 真实训练验证） |
+| 安全与健壮性加固 | ✅ 2026 全量审查后的修复轮：CORS/路径遍历/队列原子认领/取消语义/崩溃恢复/心跳卡死检测/数据管线加固/前端交互修复（详见 `审查报告_全量.md`） |
 
-> 当前状态：**M0 完成，M1（SDXL 全流程）未开始**。快速体验：`tiandi init` → `tiandi server --web`（浏览器模式）或运行桌面壳 `tiandi-app`。
+> 当前状态：**M0–M3 完成**。快速体验：`tiandi init` → `tiandi server --web`（浏览器模式）或运行桌面壳 `tiandi-app`。
 
 ## 快速开始（M0 骨架）
 

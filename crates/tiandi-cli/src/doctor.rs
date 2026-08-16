@@ -90,13 +90,9 @@ pub fn run() {
                     let torch = v.get("torch").and_then(|t| t.as_str()).unwrap_or("?");
                     let commit = v.get("commit").and_then(|c| c.as_str()).unwrap_or("?");
                     let venv_py = v.get("python").and_then(|p| p.as_str()).unwrap_or("");
-                    // 探测 CUDA 可用性（短超时）
+                    // 探测 CUDA 可用性（带超时：8 秒轮询，防 venv 卡住挂起 doctor）
                     let cuda = if !venv_py.is_empty() {
-                        std::process::Command::new(venv_py)
-                            .args(["-c", "import torch; print(torch.cuda.is_available())"])
-                            .output()
-                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                            .unwrap_or_else(|_| "未知".into())
+                        probe_torch_cuda(venv_py)
                     } else {
                         "未知".into()
                     };
@@ -132,6 +128,45 @@ pub fn run() {
     } else {
         println!("✗ 体检存在未通过项（见上）。训练必需项：GPU/CUDA；其余项可带警告继续。");
     }
+}
+
+/// 探测 torch CUDA 可用性：spawn 后轮询 try_wait（200ms 间隔，最多 8 秒），
+/// 超时 kill 并返回"探测超时"，避免 venv 卡住时 doctor 永久挂起。
+/// 输出仅 "True"/"False" 一行，远小于管道缓冲，piped 读取不会阻塞。
+fn probe_torch_cuda(venv_py: &str) -> String {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = match Command::new(venv_py)
+        .args(["-c", "import torch; print(torch.cuda.is_available())"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return "未知".into(),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    let finished = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break true,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Err(_) => return "未知".into(),
+        }
+    };
+    if !finished {
+        return "探测超时".into();
+    }
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+    out.trim().to_string()
 }
 
 /// 查询 nvidia-smi 摘要（名称/显存/驱动）。

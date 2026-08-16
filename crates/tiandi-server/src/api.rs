@@ -198,26 +198,44 @@ async fn enqueue_run(state: &AppState, id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// `POST /api/runs/{id}/cancel`：取消训练（两段式：优雅请求 → 超时 kill-tree）。
+/// `POST /api/runs/{id}/cancel`：取消训练。
+/// - 排队/已创建任务：无内核句柄，直接置 Canceled 并发事件；
+/// - 运行中任务：先置 Canceled 并发事件，再请求内核取消（trainer.cancel 报错仅 warn，
+///   不覆盖已置的 Canceled——杜绝"强杀后 EOF 兜底 fail 覆盖 Canceled"的竞态，
+///   supervisor 的 fail 处理器有 `!is_terminal()` 守卫，Canceled 是终态不会被覆盖）；
+/// - 终态任务取消 → Conflict（保持原语义）。
 async fn cancel_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Run>, ApiError> {
-    state
-        .trainer
-        .cancel(&id)
-        .map_err(|e| ApiError::Conflict(format!("取消失败：{e}")))?;
     let store = state.store.lock().await;
     let run = store.get_run(&id)?;
-    if !run.state.is_terminal() {
-        let updated_at = chrono::Utc::now().to_rfc3339();
-        store.update_run_state(&id, RunState::Canceled, &updated_at)?;
-        state.bus.emit(Event::RunStateChanged {
-            run_id: id.clone(),
-            from: run.state,
-            to: RunState::Canceled,
-        });
+    if run.state.is_terminal() {
+        return Err(ApiError::Conflict(format!(
+            "任务状态 {} 已结束，不能取消",
+            run.state.label()
+        )));
     }
+    let from = run.state;
+    // 排队中（或已创建）尚未拉起内核：直接置 Canceled，不调用 trainer.cancel
+    let needs_kernel_cancel = !matches!(run.state, RunState::Queued | RunState::Created);
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    store.update_run_state(&id, RunState::Canceled, &updated_at)?;
+    drop(store);
+    state.bus.emit(Event::RunStateChanged {
+        run_id: id.clone(),
+        from,
+        to: RunState::Canceled,
+    });
+    if needs_kernel_cancel {
+        if let Err(e) = state.trainer.cancel(&id) {
+            warn!(
+                "取消任务 {} 内核失败：{e}（状态已置为已取消，忽略该错误）",
+                &id[..8]
+            );
+        }
+    }
+    let store = state.store.lock().await;
     Ok(Json(store.get_run(&id)?))
 }
 
@@ -249,6 +267,13 @@ async fn delete_run(
     let dir = state.trainer.runs_dir().join(&id);
     if dir.exists() {
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    // 同时清理 output 产物目录（示例图/LoRA，output/<id>）；失败仅 warn 不阻塞
+    let out_dir = crate::output_root(state.trainer.runs_dir()).join(&id);
+    if out_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&out_dir) {
+            warn!("清理任务产物目录失败：{e}");
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -434,6 +459,152 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_run_marks_canceled() {
+        let app = router(test_state());
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let run: Run =
+            serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+
+        // 入队（Created → Queued）
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{}/transition", run.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"to":"queued"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // 取消排队任务：直接置 Canceled（不调用 trainer.cancel，无内核句柄）
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{}/cancel", run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let run: Run =
+            serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(run.state, RunState::Canceled);
+    }
+
+    #[tokio::test]
+    async fn cancel_terminal_run_conflicts() {
+        let app = router(test_state());
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let run: Run =
+            serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+
+        // 先取消（Created → Canceled，终态）
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{}/cancel", run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // 再取消终态任务 → Conflict（保持原语义）
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{}/cancel", run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_run_removes_run_and_output_dirs() {
+        let st = test_state();
+        let app = router(st.clone());
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let run: Run =
+            serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+
+        // 构造任务目录与 output 产物目录
+        let runs_dir = st.trainer.runs_dir().to_path_buf();
+        let run_dir = runs_dir.join(&run.id);
+        let out_dir = crate::output_root(&runs_dir).join(&run.id);
+        std::fs::create_dir_all(run_dir.join("logs")).unwrap();
+        std::fs::write(run_dir.join("logs/training.log"), "x").unwrap();
+        std::fs::create_dir_all(&out_dir).unwrap();
+        std::fs::write(out_dir.join("lora.safetensors"), b"x").unwrap();
+        // 置终态后删除
+        {
+            let s = st.store.lock().await;
+            s.update_run_state(&run.id, RunState::Done, "t").unwrap();
+        }
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/runs/{}", run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        assert!(!run_dir.exists(), "runs/<id> 目录应被删除");
+        assert!(!out_dir.exists(), "output/<id> 目录应被删除");
     }
 
     #[tokio::test]

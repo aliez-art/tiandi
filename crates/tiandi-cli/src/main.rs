@@ -181,21 +181,28 @@ async fn main() {
     }
 }
 
-/// 解析目录参数（"." → 当前目录）。
+/// 解析目录参数（"." → 当前目录），并 canonicalize 为绝对路径，
+/// 避免相对路径透传给内核导致 cwd/配置相对路径错位；失败时保留原路径并 warn。
 fn resolve_dir(dir: &std::path::Path) -> std::path::PathBuf {
-    if dir.as_os_str().is_empty() || dir == std::path::Path::new(".") {
-        std::env::current_dir().expect("读取当前目录")
-    } else {
-        dir.to_path_buf()
-    }
-}
-
-fn cmd_init(dir: &std::path::Path, name: Option<String>) {
-    let root = if dir.as_os_str().is_empty() || dir == std::path::Path::new(".") {
+    let raw = if dir.as_os_str().is_empty() || dir == std::path::Path::new(".") {
         std::env::current_dir().expect("读取当前目录")
     } else {
         dir.to_path_buf()
     };
+    match std::fs::canonicalize(&raw) {
+        Ok(abs) => abs,
+        Err(e) => {
+            tracing::warn!(
+                "目录 canonicalize 失败（{e}），使用原路径：{}",
+                raw.display()
+            );
+            raw
+        }
+    }
+}
+
+fn cmd_init(dir: &std::path::Path, name: Option<String>) {
+    let root = resolve_dir(dir);
     if let Err(e) = tiandi_state::ensure_workspace_layout(&root) {
         eprintln!("✗ 创建工作区失败：{e}");
         std::process::exit(1);
@@ -221,11 +228,7 @@ fn cmd_init(dir: &std::path::Path, name: Option<String>) {
 }
 
 async fn cmd_server(dir: &std::path::Path, port: u16, demo: bool, web: bool) {
-    let root = if dir.as_os_str().is_empty() || dir == std::path::Path::new(".") {
-        std::env::current_dir().expect("读取当前目录")
-    } else {
-        dir.to_path_buf()
-    };
+    let root = resolve_dir(dir);
     if let Err(e) = tiandi_state::ensure_workspace_layout(&root) {
         eprintln!("✗ 工作区不完整：{e}（先运行 tiandi init）");
         std::process::exit(1);

@@ -90,6 +90,59 @@ def run_mock(config_path: str) -> None:
     emit({"type": "done", "run_id": os.environ.get("TIANDI_RUN_ID", ""), "code": 0})
 
 
+# ---------------------------------------------------------------- 心跳与采样监控
+
+def heartbeat_loop(stop_event: threading.Event) -> None:
+    """心跳：每 2s 发一次 heartbeat 事件。
+
+    Rust 侧看门狗以 30s 无 stdout 输出判卡死；长静默阶段（checkpoint 落盘、
+    采样等）靠心跳续命。stdout 直写与 emit() 一致（GIL 下 buffer.write+flush
+    原子性可接受）。
+    """
+    while not stop_event.wait(2.0):
+        emit({"type": "heartbeat"})
+
+
+def sample_watcher(stop_event: threading.Event, sample_dir: str, run_id: str) -> None:
+    """采样目录监控：新出现的 *.png/*.jpg 发 sample 事件（真实训练的出图通道）。
+
+    Rust 侧已注入 TIANDI_SAMPLE_DIR（绝对路径），mock 模式也是绝对路径事件，
+    保持一致：sample 事件 path 用绝对路径（supervisor 对绝对路径直接使用）。
+    """
+    if not sample_dir:
+        return
+    seen = set()
+    try:
+        os.makedirs(sample_dir, exist_ok=True)
+        seen.update(os.listdir(sample_dir))
+    except OSError:
+        pass
+    while True:
+        scan_samples(sample_dir, seen, run_id)
+        if stop_event.wait(2.0):
+            # 终态前最后扫一遍，尽量补齐训练末尾落盘的采样
+            scan_samples(sample_dir, seen, run_id)
+            return
+
+
+def scan_samples(sample_dir: str, seen: set, run_id: str) -> None:
+    """列出采样目录中尚未上报的图片文件并逐张发 sample 事件。"""
+    try:
+        if not os.path.isdir(sample_dir):
+            return
+        for name in sorted(os.listdir(sample_dir)):
+            if name in seen:
+                continue
+            if not name.lower().endswith((".png", ".jpg", ".jpeg")):
+                continue
+            seen.add(name)
+            path = os.path.join(sample_dir, name)
+            emit({"type": "sample", "run_id": run_id, "path": path})
+            log(f"采样出图：{path}")
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------- sd-scripts 模式
 
 def run_sdscripts(config_path: str) -> None:
@@ -134,6 +187,15 @@ def run_sdscripts(config_path: str) -> None:
 
     threading.Thread(target=control_loop, daemon=True).start()
 
+    # 心跳（≥2s）与采样目录监控：Rust 侧看门狗/采样画廊的输入
+    stop_event = threading.Event()
+    threading.Thread(target=heartbeat_loop, args=(stop_event,), daemon=True).start()
+    threading.Thread(
+        target=sample_watcher,
+        args=(stop_event, os.environ.get("TIANDI_SAMPLE_DIR", ""), os.environ.get("TIANDI_RUN_ID", "")),
+        daemon=True,
+    ).start()
+
     # 终态事件兜底：无论子进程如何退出，确保 done/fail 必然发出
     code = None
     tail_buf = []
@@ -166,6 +228,7 @@ def run_sdscripts(config_path: str) -> None:
         emit({"type": "fail", "code": 1, "tail": str(exc)})
         return
     finally:
+        stop_event.set()
         if code is None:
             if proc.poll() is None:
                 kill_tree(proc)
@@ -278,6 +341,15 @@ def run_aitk(config_path: str) -> None:
 
     threading.Thread(target=control_loop, daemon=True).start()
 
+    # 心跳（≥2s）与采样目录监控：Rust 侧看门狗/采样画廊的输入
+    stop_event = threading.Event()
+    threading.Thread(target=heartbeat_loop, args=(stop_event,), daemon=True).start()
+    threading.Thread(
+        target=sample_watcher,
+        args=(stop_event, os.environ.get("TIANDI_SAMPLE_DIR", ""), os.environ.get("TIANDI_RUN_ID", "")),
+        daemon=True,
+    ).start()
+
     code = None
     tail_buf = []
     try:
@@ -307,6 +379,7 @@ def run_aitk(config_path: str) -> None:
         emit({"type": "fail", "code": 1, "tail": str(exc)})
         return
     finally:
+        stop_event.set()
         if code is None:
             if proc.poll() is None:
                 kill_tree(proc)

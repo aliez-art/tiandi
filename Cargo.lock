@@ -4774,8 +4774,6 @@ dependencies = [
 name = "tiandi-app"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tiandi-core",
@@ -4842,15 +4840,12 @@ dependencies = [
 name = "tiandi-engine-compat"
 version = "0.1.0"
 dependencies = [
- "chrono",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tiandi-core",
  "tiandi-engine",
  "tiandi-recipe",
- "tiandi-state",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4882,7 +4877,6 @@ dependencies = [
  "http-body-util",
  "image",
  "raw-window-handle",
- "regex",
  "rfd",
  "serde",
  "serde_json",
@@ -4907,7 +4901,6 @@ dependencies = [
 name = "tiandi-state"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "rusqlite",
  "serde",
  "serde_json",

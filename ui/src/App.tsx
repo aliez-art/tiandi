@@ -28,10 +28,14 @@ const STATE_LABEL: Record<string, string> = {
   canceled: '已取消',
 }
 
+/** 终态任务（可删除）；其余运行中任务禁止删除。 */
+const TERMINAL_STATES = ['done', 'failed', 'canceled']
+
 /** 布局：左侧边栏（丹方 / 炼丹记录），右侧主区。 */
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
-  const [connecting, setConnecting] = useState(true)
+  /** 连接状态：connecting 初次探测 / connected 已连接 / retrying SSE 断开重连 / down 服务不可达 */
+  const [connState, setConnState] = useState<'connecting' | 'connected' | 'retrying' | 'down'>('connecting')
   const [system, setSystem] = useState<SystemInfo | null>(null)
   const [view, setView] = useState<'lora' | 'full' | 'runs'>('lora')
   const [runs, setRuns] = useState<Run[]>([])
@@ -39,6 +43,8 @@ export default function App() {
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const eventSeq = useRef(0)
+  /** SSE 事件触发的列表刷新防抖计时器（1s） */
+  const refreshDebounce = useRef<number | null>(null)
 
   // GPU 监控（3s 轮询）
   useEffect(() => {
@@ -76,49 +82,111 @@ export default function App() {
     }
   }, [])
 
+  /** SSE 事件触发的列表刷新防抖（1s）：非终态事件聚合刷新，避免全量刷新风暴。 */
+  const scheduleRunsRefresh = useCallback(() => {
+    if (refreshDebounce.current !== null) window.clearTimeout(refreshDebounce.current)
+    refreshDebounce.current = window.setTimeout(() => {
+      refreshDebounce.current = null
+      void refreshRuns()
+    }, 1000)
+  }, [refreshRuns])
+
   useEffect(() => {
     let cancelled = false
     let es: EventSource | null = null
+    let retryTimer: number | null = null
+    let failCount = 0
+    let hadConnection = false
+
+    const clearRetry = () => {
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+        retryTimer = null
+      }
+    }
+
+    const closeEs = () => {
+      if (es) {
+        es.close()
+        es = null
+      }
+    }
+
+    const onEvent = (line: string) => {
+      let type = 'log'
+      try {
+        type = (JSON.parse(line) as { type?: string }).type ?? 'log'
+      } catch {
+        /* 非 JSON 行按 log 处理 */
+      }
+      setEvents((prev) => [...prev.slice(-499), { id: ++eventSeq.current, type, data: line }])
+      // 状态迁移 / 终态事件立即刷新；其余（log/metric/sample…）走 1s 防抖
+      if (type === 'run_state_changed' || type === 'done' || type === 'fail') {
+        void refreshRuns()
+      } else {
+        scheduleRunsRefresh()
+      }
+    }
 
     // 连接循环：端口发现失败则 1.5s 后重试（覆盖服务启动竞态与端口回退）
     const connect = async () => {
+      if (cancelled) return
+      // 重建前关闭旧连接，防止泄漏
+      closeEs()
+      clearRetry()
       const found = await discoverBase()
       if (cancelled) return
       if (!found) {
-        window.setTimeout(connect, 1500)
+        failCount += 1
+        // 约 10 次（≈15s）仍不可达 → 顶部切为「服务未连接」错误态（仍继续重试）
+        if (failCount >= 10) {
+          setConnState('down')
+        } else if (!hadConnection) {
+          setConnState('connecting')
+        }
+        retryTimer = window.setTimeout(() => void connect(), 1500)
         return
       }
       try {
         const h = await fetchHealth()
         if (cancelled) return
         setHealth(h)
-        setConnecting(false)
+        hadConnection = true
+        failCount = 0
+        setConnState('connected')
       } catch (e) {
         if (cancelled) return
         console.error('health check failed', e)
-        window.setTimeout(connect, 1500)
+        retryTimer = window.setTimeout(() => void connect(), 1500)
         return
       }
       await refreshRuns()
       if (cancelled) return
-      es = subscribeEvents((line) => {
-        let type = 'log'
-        try {
-          type = (JSON.parse(line) as { type?: string }).type ?? 'log'
-        } catch {
-          /* 非 JSON 行按 log 处理 */
-        }
-        setEvents((prev) => [...prev.slice(-499), { id: ++eventSeq.current, type, data: line }])
-        void refreshRuns()
-      })
+      es = subscribeEvents(
+        onEvent,
+        () => {
+          // SSE 断开：提示并重新发现端口、重建连接（重建前已 close 旧连接）
+          if (cancelled) return
+          setConnState(hadConnection ? 'retrying' : 'connecting')
+          closeEs()
+          clearRetry()
+          retryTimer = window.setTimeout(() => void connect(), 500)
+        },
+        () => {
+          // 连接建立
+          if (!cancelled && hadConnection) setConnState('connected')
+        },
+      )
     }
     void connect()
 
     return () => {
       cancelled = true
-      es?.close()
+      closeEs()
+      clearRetry()
+      if (refreshDebounce.current !== null) window.clearTimeout(refreshDebounce.current)
     }
-  }, [refreshRuns])
+  }, [refreshRuns, scheduleRunsRefresh])
 
   const selectedRun = runs.find((r) => r.id === selected) ?? null
 
@@ -135,7 +203,7 @@ export default function App() {
 
   /** 清空全部已结束任务（串行删除）。 */
   const onClearFinished = async () => {
-    const finished = runs.filter((r) => r.state === 'done' || r.state === 'failed' || r.state === 'canceled')
+    const finished = runs.filter((r) => TERMINAL_STATES.includes(r.state))
     if (finished.length === 0) return
     if (!window.confirm(`清空 ${finished.length} 条已结束的炼丹记录（含日志/产物，不可恢复）？`)) return
     for (const r of finished) {
@@ -162,12 +230,14 @@ export default function App() {
               {(system.gpu.mem_total_mb / 1024).toFixed(0)}GB
             </span>
           )}
-          {connecting ? (
-            <span className="connecting">◌ 正在点火…</span>
-          ) : health ? (
+          {connState === 'retrying' ? (
+            <span className="retrying">⚠ 连接已断开，重连中…</span>
+          ) : connState === 'down' ? (
+            <span className="err">● 服务未连接</span>
+          ) : connState === 'connected' && health ? (
             <span className="ok">● 已点火 v{health.version}</span>
           ) : (
-            <span className="err">● 服务未连接</span>
+            <span className="connecting">◌ 正在点火…</span>
           )}
         </div>
       </header>
@@ -213,7 +283,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-title">
                   <h2>炼丹记录</h2>
-                  {runs.some((r) => r.state === 'done' || r.state === 'failed' || r.state === 'canceled') && (
+                  {runs.some((r) => TERMINAL_STATES.includes(r.state)) && (
                     <button className="secondary" onClick={() => void onClearFinished()} title="删除所有已结束的任务">
                       清空已结束
                     </button>
@@ -227,7 +297,15 @@ export default function App() {
                       <li
                         key={r.id}
                         className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
+                        tabIndex={0}
+                        role="button"
                         onClick={() => setSelected(r.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            setSelected(r.id)
+                          }
+                        }}
                       >
                         {previews[r.id] ? (
                           <img
@@ -246,7 +324,13 @@ export default function App() {
                         <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>
                         <button
                           className="run-del"
-                          title="删除任务（含日志/产物/采样）"
+                          title={
+                            TERMINAL_STATES.includes(r.state)
+                              ? '删除任务（含日志/产物/采样）'
+                              : '运行中任务不可删除'
+                          }
+                          disabled={!TERMINAL_STATES.includes(r.state)}
+                          aria-label="删除任务"
                           onClick={(e) => {
                             e.stopPropagation()
                             void onDeleteRun(r)

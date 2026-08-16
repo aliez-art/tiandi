@@ -17,3 +17,8 @@ kamadak-exif.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# kamadak-exif 以 `use exif::...` 形式使用（crate 名与包名不同），
+# cargo-machete 误报为未使用，声明忽略。
+[package.metadata.cargo-machete]
+ignored = ["kamadak-exif"]

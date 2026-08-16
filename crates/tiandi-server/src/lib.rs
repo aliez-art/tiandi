@@ -13,7 +13,16 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{
+    extract::Request,
+    http::{
+        header::{self, HeaderValue},
+        StatusCode,
+    },
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    Router,
+};
 use tiandi_core::EventBus;
 use tiandi_engine_compat::SdScriptsTrainer;
 use tiandi_state::Store;
@@ -53,20 +62,20 @@ impl AppState {
 /// 构建完整路由。
 pub fn build_router(state: AppState) -> Router {
     // 本地单用户工具：WebView（tauri://localhost）与纯浏览器模式均需跨源访问，
-    // 且服务只绑 127.0.0.1，permissive CORS 无风险（PRD §7 安全要求）。
+    // 且服务只绑 127.0.0.1。permissive CORS 仅为本地跨源提供 ACAO 响应头，
+    // 真正的访问控制由最外层 `guard_local_access` 中间件完成（Host/Origin 白名单）。
     // 路由：/api/* → API；/output/* → 产物静态（示例图/LoRA）；其余 → UI（SPA，若存在）。
     let runs_dir = state.trainer.runs_dir().to_path_buf();
     let output_root = output_root(&runs_dir);
     let serve_output =
         tower_http::services::ServeDir::new(&output_root).append_index_html_on_directories(false);
     let mut router = api::router(state)
-        .layer(tower_http::cors::CorsLayer::permissive())
         .nest_service("/output", serve_output.clone())
         // 未知 /api/* 路径：404（不落入 SPA fallback）
         .route(
             "/api/{*rest}",
-            axum::routing::get(|| async { axum::http::StatusCode::NOT_FOUND })
-                .post(|| async { axum::http::StatusCode::NOT_FOUND }),
+            axum::routing::get(|| async { StatusCode::NOT_FOUND })
+                .post(|| async { StatusCode::NOT_FOUND }),
         );
     match ui_dist_dir() {
         // 一键启动模式：服务 UI 构建产物（SPA fallback 到 index.html）
@@ -81,15 +90,16 @@ pub fn build_router(state: AppState) -> Router {
             router = router.fallback_service(serve_output);
         }
     }
+    // 中间件（后加的在外层）：guard 校验 Host/Origin 并附加安全响应头；
+    // CORS 放行在其内（本地跨源仍需 ACAO 头，恶意来源在 guard 即被拒）
     router
+        .layer(tower_http::cors::CorsLayer::permissive())
+        .layer(middleware::from_fn(guard_local_access))
 }
 
 /// 产物根目录（runs 的兄弟目录 `<workspace>/output`）：示例图与每轮 LoRA 集中存放。
 pub fn output_root(runs_dir: &std::path::Path) -> std::path::PathBuf {
-    runs_dir
-        .parent()
-        .unwrap_or(runs_dir)
-        .join("output")
+    runs_dir.parent().unwrap_or(runs_dir).join("output")
 }
 
 /// UI 构建产物目录（`<repo>/ui/dist`）；可用 `TIANDI_UI_DIR` 覆盖。
@@ -140,8 +150,7 @@ impl ServerConfig {
 
 /// 内核适配层默认路径（kernel_runner.py，随 crate 分发）。
 pub fn default_wrapper_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tiandi-engine-compat/assets/kernel_runner.py")
+    tiandi_engine_compat::asset_path("kernel_runner.py")
 }
 
 /// 启动服务（阻塞直到 Ctrl-C）。
@@ -153,8 +162,8 @@ pub async fn serve(state: AppState, config: ServerConfig) -> Result<u16, std::io
     supervisor::spawn(state.clone());
     queue::spawn(state.clone());
     let mut last_err = None;
-    for offset in 0..10 {
-        let port = config.port + offset;
+    for offset in 0..10u16 {
+        let port = config.port.saturating_add(offset);
         let addr = format!("{}:{}", config.host, port)
             .parse::<SocketAddr>()
             .expect("合法地址");
@@ -169,10 +178,14 @@ pub async fn serve(state: AppState, config: ServerConfig) -> Result<u16, std::io
                     );
                 }
                 tracing::info!("天地熔炉已点火（server listening on {actual}）");
+                let trainer = state.trainer.clone();
                 axum::serve(listener, build_router(state))
                     .with_graceful_shutdown(shutdown_signal())
                     .await
                     .map_err(std::io::Error::other)?;
+                // 优雅关停完成：终止全部内核进程（防止孤儿内核继续训练/写产物）
+                tracing::info!("关停：终止全部内核进程");
+                trainer.kill_all();
                 return Ok(actual.port());
             }
             Err(e) => {
@@ -201,4 +214,191 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     tracing::info!("收到停止信号，熄火...");
+}
+
+// ---------- 本地访问守卫（Host/Origin 白名单 + 安全响应头） ----------
+
+/// 本地访问守卫中间件：
+/// - `Host` 必须为 localhost / 127.0.0.1（可带端口，忽略大小写）→ 防 DNS rebinding；
+///   无 `Host` 头的 HTTP/1.0 请求放行；
+/// - `Origin` 缺失（同源/非浏览器）放行；存在时必须为本地来源
+///   （`tauri://localhost`、`http://localhost[:port]`、`http://127.0.0.1[:port]`、
+///   `http://tauri.localhost[:port]`），其余一律 403（防任意网页跨源读写本地服务）；
+/// - 同时为所有响应附加 `X-Content-Type-Options: nosniff`。
+async fn guard_local_access(request: Request, next: Next) -> Response {
+    // Host：必须为 localhost / 127.0.0.1（可带端口，忽略大小写）→ 防 DNS rebinding；
+    // 无 Host 头（HTTP/1.0）放行
+    if let Some(h) = request.headers().get(header::HOST) {
+        let Ok(host) = h.to_str() else {
+            return forbidden();
+        };
+        if !host_allowed(host) {
+            return forbidden();
+        }
+    }
+    // Origin：缺失（同源/非浏览器）放行；存在时必须为本地来源，其余 403
+    if let Some(o) = request.headers().get(header::ORIGIN) {
+        let Ok(origin) = o.to_str() else {
+            return forbidden();
+        };
+        if !origin_allowed(origin) {
+            return forbidden();
+        }
+    }
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+fn forbidden() -> Response {
+    (StatusCode::FORBIDDEN, "forbidden").into_response()
+}
+
+/// `Host` 头是否为本机回环地址（localhost / 127.0.0.1，可带端口，忽略大小写）。
+fn host_allowed(host: &str) -> bool {
+    let hostname = host.trim().split(':').next().unwrap_or(host);
+    hostname.eq_ignore_ascii_case("localhost") || hostname.eq_ignore_ascii_case("127.0.0.1")
+}
+
+/// `Origin` 头是否为本机来源（scheme://host[:port] 形态）。
+fn origin_allowed(origin: &str) -> bool {
+    let Some((scheme, authority)) = origin.trim().split_once("://") else {
+        return false;
+    };
+    let host = authority.split(':').next().unwrap_or(authority);
+    match scheme.to_ascii_lowercase().as_str() {
+        // Tauri WebView（Windows/macOS）
+        "tauri" => host.eq_ignore_ascii_case("localhost"),
+        // 纯浏览器模式 / Linux WebView（WebKitGTK）
+        "http" => {
+            host.eq_ignore_ascii_case("localhost")
+                || host.eq_ignore_ascii_case("127.0.0.1")
+                || host.eq_ignore_ascii_case("tauri.localhost")
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use http_body_util::BodyExt;
+    use tiandi_core::EventBus;
+    use tiandi_state::Store;
+    use tower::ServiceExt;
+
+    fn test_router() -> Router {
+        let store = Store::open_in_memory().unwrap();
+        let st = AppState::new(
+            store,
+            EventBus::default(),
+            std::env::temp_dir(),
+            default_wrapper_path(),
+            true,
+        );
+        build_router(st)
+    }
+
+    async fn get(app: &Router, headers: &[(&str, &str)]) -> axum::response::Response {
+        let mut builder = HttpRequest::builder().uri("/api/health");
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        app.clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn host_allowlist() {
+        assert!(host_allowed("localhost"));
+        assert!(host_allowed("LOCALHOST"));
+        assert!(host_allowed("localhost:18765"));
+        assert!(host_allowed("127.0.0.1"));
+        assert!(host_allowed("127.0.0.1:8080"));
+        assert!(!host_allowed("evil.example.com"));
+        assert!(!host_allowed("localhost.evil.com:8080"));
+        assert!(!host_allowed(""));
+        assert!(!host_allowed("0.0.0.0:18765"));
+    }
+
+    #[test]
+    fn origin_allowlist() {
+        assert!(origin_allowed("tauri://localhost"));
+        assert!(origin_allowed("http://localhost"));
+        assert!(origin_allowed("http://localhost:5173"));
+        assert!(origin_allowed("http://127.0.0.1:18765"));
+        assert!(origin_allowed("http://tauri.localhost"));
+        assert!(origin_allowed("http://tauri.localhost:1420"));
+        assert!(!origin_allowed("https://evil.example.com"));
+        assert!(!origin_allowed("http://evil.example.com"));
+        assert!(!origin_allowed("file:///etc/passwd"));
+        assert!(!origin_allowed("tauri://evil.com"));
+        assert!(!origin_allowed("garbage"));
+        assert!(!origin_allowed(""));
+    }
+
+    #[tokio::test]
+    async fn malicious_origin_rejected() {
+        let app = test_router();
+        let res = get(&app, &[("origin", "https://evil.example.com")]).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn malicious_host_rejected() {
+        let app = test_router();
+        let res = get(&app, &[("host", "evil.example.com")]).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn localhost_origin_and_host_allowed() {
+        let app = test_router();
+        let res = get(
+            &app,
+            &[
+                ("host", "127.0.0.1:18765"),
+                ("origin", "http://localhost:5173"),
+            ],
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn tauri_origin_allowed() {
+        let app = test_router();
+        let res = get(&app, &[("origin", "tauri://localhost")]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn no_origin_request_allowed() {
+        // 同源/非浏览器请求无 Origin → 放行
+        let app = test_router();
+        let res = get(&app, &[]).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn responses_carry_nosniff_header() {
+        let app = test_router();
+        let res = get(&app, &[]).await;
+        assert_eq!(
+            res.headers()
+                .get("x-content-type-options")
+                .and_then(|h| h.to_str().ok()),
+            Some("nosniff")
+        );
+    }
 }

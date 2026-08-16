@@ -7,16 +7,13 @@ rust-version.workspace = true
 description = "Python 内核编排：sd-scripts / ai-toolkit 双后端、进程监督、IPC/Stdio 桥"
 
 [dependencies]
-serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-chrono.workspace = true
 tiandi-core = { path = "../tiandi-core" }
 tiandi-engine = { path = "../tiandi-engine" }
 tiandi-recipe = { path = "../tiandi-recipe" }
-tiandi-state = { path = "../tiandi-state" }
 
 [dev-dependencies]
 tempfile.workspace = true

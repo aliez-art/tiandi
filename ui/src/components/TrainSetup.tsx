@@ -548,6 +548,13 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
   const [data, setData] = useState<Record<string, unknown>>(defaultData())
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [msgError, setMsgError] = useState(false)
+
+  /** 状态消息：isError=true 渲染为红色错误样式（.status-line.error）。 */
+  const showMsg = (m: string | null, isError = false) => {
+    setMsg(m)
+    setMsgError(isError)
+  }
 
   const refresh = async () => {
     const [r, m, d] = await Promise.all([listRecipes(), listModels(), listDatasets()])
@@ -568,16 +575,16 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
 
   const onPickModel = async () => {
     setBusy(true)
-    setMsg(null)
+    showMsg(null)
     try {
       const path = await pickFile()
       if (path) {
         const imported = await importAsset('base_model', path)
         setModelPath(imported)
-        setMsg(`已选底模：${imported}`)
+        showMsg(`已选底模：${imported}`)
       }
     } catch (e) {
-      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
     } finally {
       setBusy(false)
     }
@@ -585,16 +592,16 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
 
   const onPickVae = async () => {
     setBusy(true)
-    setMsg(null)
+    showMsg(null)
     try {
       const path = await pickFile()
       if (path) {
         const imported = await importAsset('vae', path)
         setVaePath(imported)
-        setMsg(`已选 VAE：${imported}`)
+        showMsg(`已选 VAE：${imported}`)
       }
     } catch (e) {
-      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
     } finally {
       setBusy(false)
     }
@@ -602,16 +609,16 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
 
   const onPickTe = async () => {
     setBusy(true)
-    setMsg(null)
+    showMsg(null)
     try {
       const path = await pickFile()
       if (path) {
         const imported = await importAsset('clip', path)
         setTePath(imported)
-        setMsg(`已选文本编码器：${imported}`)
+        showMsg(`已选文本编码器：${imported}`)
       }
     } catch (e) {
-      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
     } finally {
       setBusy(false)
     }
@@ -619,15 +626,15 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
 
   const onPickDataset = async () => {
     setBusy(true)
-    setMsg(null)
+    showMsg(null)
     try {
       const dir = await pickDir()
       if (dir) {
         setDatasetDir(dir)
-        setMsg(`已选数据集：${dir}`)
+        showMsg(`已选数据集：${dir}`)
       }
     } catch (e) {
-      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
     } finally {
       setBusy(false)
     }
@@ -652,29 +659,36 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
     return payload
   }
 
-  const onSave = async (): Promise<string | null> => {
-    if (!name.trim()) {
-      setMsg('请填写丹方名称')
+  /**
+   * 保存丹方。
+   * `overrideName`：点火流程传入（自动命名时表单 name 尚未更新，用显式值校验/保存）。
+   */
+  const onSave = async (overrideName?: string): Promise<string | null> => {
+    const effName = (overrideName ?? name).trim()
+    if (!effName) {
+      showMsg('请填写丹方名称', true)
       return null
     }
     setBusy(true)
-    setMsg(null)
+    showMsg(null)
     try {
-      // 更新 = 删旧建新（后端无 PUT）
-      if (recipeId) {
+      // 更新 = 先创建成功、再删旧（后端无 PUT；避免创建失败丢失旧丹方）
+      const res = await createRecipe(effName, family, buildPayload())
+      const newId = res.recipe.id
+      if (recipeId && recipeId !== newId) {
         try {
           await deleteRecipe(recipeId)
-        } catch {
-          /* 忽略 */
+        } catch (e) {
+          // 删除旧丹方失败不阻塞（新丹方已保存成功）
+          console.warn('删除旧丹方失败', e)
         }
       }
-      const res = await createRecipe(name.trim(), family, buildPayload())
-      setRecipeId(res.recipe.id)
-      setMsg(`丹方「${name.trim()}」已保存`)
+      setRecipeId(newId)
+      showMsg(`丹方「${effName}」已保存`)
       await refresh()
-      return res.recipe.id
+      return newId
     } catch (e) {
-      setMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`, true)
       return null
     } finally {
       setBusy(false)
@@ -683,23 +697,22 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
 
   const onFire = async () => {
     if (!modelPath || !datasetDir) {
-      setMsg('请先选择底模与数据集')
+      showMsg('请先选择底模与数据集', true)
       return
     }
     if (full && family === 'dit_krea2') {
-      setMsg('Krea 2 全量训练暂不支持（ai-toolkit 后端仅 LoRA）')
+      showMsg('Krea 2 全量训练暂不支持（ai-toolkit 后端仅 LoRA）', true)
       return
     }
     setBusy(true)
-    setMsg(null)
+    showMsg(null)
     try {
-      // 1. 丹方：未保存则先保存（含底模/数据集路径）
-      let rid = recipeId
-      if (!rid) {
-        if (!name.trim()) setName(basename(modelPath).replace(/\.safetensors$/i, '') + '-丹方')
-        rid = await onSave()
-        if (!rid) return
-      }
+      // 1. 丹方：无论是否已保存都先保存（表单即真理，改动必然生效）；空名自动命名
+      const effName = name.trim() || basename(modelPath).replace(/\.safetensors$/i, '') + '-丹方'
+      if (!name.trim()) setName(effName)
+      const rid = await onSave(effName)
+      if (!rid) return // 保存失败：中止点火（错误提示已由 onSave 设置）
+      setBusy(true) // onSave 内部 finally 已复位 busy，这里重新锁住后续步骤
       // 2. 模型：按路径复用或自动注册
       let model = models.find((m) => m.path === modelPath)
       if (!model) {
@@ -715,10 +728,10 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       // 4. 创建任务并点火
       const run = await createRun({ dataset_id: ds.id, recipe_id: rid, base_model_id: model.id })
       await startRun(run.id)
-      setMsg('已入队，自动开始炼丹')
+      showMsg('已保存丹方并点火')
       props.onCreated(run.id)
     } catch (e) {
-      setMsg(`点火失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`点火失败：${e instanceof Error ? e.message : String(e)}`, true)
     } finally {
       setBusy(false)
     }
@@ -736,7 +749,7 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
     if (typeof d.vae_path === 'string') setVaePath(d.vae_path)
     if (typeof d.te_path === 'string') setTePath(d.te_path)
     if (typeof d.dataset_dir === 'string') setDatasetDir(d.dataset_dir)
-    setMsg(`已载入丹方「${r.name}」`)
+    showMsg(`已载入丹方「${r.name}」`)
   }
 
   const onDeleteRecipe = async (r: RecipeView) => {
@@ -749,7 +762,7 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       }
       await refresh()
     } catch (e) {
-      setMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+      showMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`, true)
     }
   }
 
@@ -783,7 +796,15 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
                 <li
                   key={r.id}
                   className={`run ${r.id === recipeId ? 'active' : ''}`}
+                  tabIndex={0}
+                  role="button"
                   onClick={() => onLoadRecipe(r)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onLoadRecipe(r)
+                    }
+                  }}
                 >
                   <span className="run-id">{r.name}</span>
                   <span className="run-state">{FAMILY_LABEL[r.family] ?? r.family}</span>
@@ -794,6 +815,7 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
                   <button
                     className="run-del"
                     title="删除丹方"
+                    aria-label="删除丹方"
                     onClick={(e) => {
                       e.stopPropagation()
                       void onDeleteRecipe(r)
@@ -928,7 +950,7 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
           <button onClick={() => void onFire()} disabled={busy} className="primary">
             {busy ? '点火中…' : '点火炼丹'}
           </button>
-          {msg && <span className="status-line">{msg}</span>}
+          {msg && <span className={`status-line${msgError ? ' error' : ''}`}>{msg}</span>}
         </div>
       </div>
     </div>

@@ -36,9 +36,10 @@ export interface MetricPoint {
   lr: number | null
 }
 
-/** 示例图/产物 URL（output 静态服务，/output/ 前缀）。 */
+/** 示例图/产物 URL（output 静态服务，/output/ 前缀；路径按段编码防特殊字符破坏 URL）。 */
 export function assetUrl(path: string): string {
-  return `${base()}/output/${path}`
+  const encoded = path.split('/').map((seg) => encodeURIComponent(seg)).join('/')
+  return `${base()}/output/${encoded}`
 }
 
 let apiBase: string | null = null
@@ -91,9 +92,15 @@ export async function fetchRunPreviews(): Promise<Record<string, string>> {
   return res.json()
 }
 
-export function subscribeEvents(onEvent: (line: string) => void): EventSource {
+export function subscribeEvents(
+  onEvent: (line: string) => void,
+  onError?: () => void,
+  onOpen?: () => void,
+): EventSource {
   const es = new EventSource(`${base()}/api/runs/all/events`)
   es.onmessage = (e) => onEvent(e.data as string)
+  if (onError) es.onerror = onError
+  if (onOpen) es.onopen = onOpen
   return es
 }
 
@@ -152,23 +159,9 @@ export interface RecipeView {
   created_at: string
 }
 
-export interface PresetView {
-  name: string
-  family: string
-  description: string
-  tags: string[]
-  data: Record<string, unknown>
-}
-
 export async function listRecipes(): Promise<RecipeView[]> {
   const res = await fetch(`${base()}/api/recipes`)
   if (!res.ok) throw new Error(`recipes ${res.status}`)
-  return res.json()
-}
-
-export async function listPresets(): Promise<PresetView[]> {
-  const res = await fetch(`${base()}/api/recipes/presets`)
-  if (!res.ok) throw new Error(`presets ${res.status}`)
   return res.json()
 }
 
@@ -218,24 +211,6 @@ export async function createDataset(name: string, dir: string): Promise<Dataset>
   return res.json()
 }
 
-export async function scanDataset(
-  id: string,
-  opts?: { resolution?: number },
-): Promise<{ report: { total: number; invalid: number; duplicate_groups: string[][]; buckets: [string, number][]; elapsed_ms: number }; images: number }> {
-  const res = await fetch(`${base()}/api/datasets/${id}/scan`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(opts ?? {}),
-  })
-  if (!res.ok) throw new Error(`scan dataset ${res.status}`)
-  return res.json()
-}
-
-export async function deleteDataset(id: string): Promise<void> {
-  const res = await fetch(`${base()}/api/datasets/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`delete dataset ${res.status}`)
-}
-
 export interface BaseModel {
   id: string
   name: string
@@ -275,22 +250,6 @@ export interface SystemInfo {
 export async function fetchSystem(): Promise<SystemInfo> {
   const res = await fetch(`${base()}/api/system`)
   if (!res.ok) throw new Error(`system ${res.status}`)
-  return res.json()
-}
-
-export async function fetchSettings(): Promise<Record<string, string>> {
-  const res = await fetch(`${base()}/api/settings`)
-  if (!res.ok) throw new Error(`settings ${res.status}`)
-  return res.json()
-}
-
-export async function updateSettings(values: Record<string, string>): Promise<Record<string, string>> {
-  const res = await fetch(`${base()}/api/settings`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ values }),
-  })
-  if (!res.ok) throw new Error(`settings ${res.status}`)
   return res.json()
 }
 

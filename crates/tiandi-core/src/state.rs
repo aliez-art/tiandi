@@ -82,11 +82,18 @@ impl RunState {
             Paused => vec![Running, Canceled],
             Sampling => vec![Running, Saving, Done, Failed, Canceled],
             Saving => vec![Running, Done, Failed, Canceled],
-            Done | Failed | Canceled => vec![],
+            // Failed 对引擎事件是终态（不会因 progress 等事件自动恢复），
+            // 但允许用户显式重试（续丹）：Failed → Queued（与 api enqueue 重试路径、
+            // docs/architecture.md §4 "failed →（一键）queued（重试）" 一致，单一事实来源）
+            Failed => vec![Queued],
+            Done | Canceled => vec![],
         }
     }
 
     /// 是否终态（不可再迁移）。
+    ///
+    /// 注意：`Failed` 对引擎事件流是终态（事件驱动的自动迁移到此为止），
+    /// 但用户显式重试（`Failed → Queued`）仍是合法迁移，见 [`RunState::legal_transitions`]。
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Done | Self::Failed | Self::Canceled)
     }
@@ -146,14 +153,17 @@ mod tests {
 
     #[test]
     fn failed_is_restartable_but_terminal() {
+        // Failed 对事件流是终态（is_terminal），但用户显式重试合法（续丹）
         assert!(RunState::Failed.is_terminal());
-        // 重试走"新建排队"路径（run 复用为续丹时由用例层创建新 run），终态不可直接迁移
-        assert!(!RunState::Failed.can_transition_to(RunState::Queued));
+        assert!(RunState::Failed.can_transition_to(RunState::Queued));
+        // 重试路径：Failed → Queued → Preparing → Running
+        assert!(RunState::Queued.can_transition_to(RunState::Preparing));
+        assert!(RunState::Preparing.can_transition_to(RunState::Running));
     }
 
     #[test]
     fn terminal_states_accept_nothing() {
-        for terminal in [RunState::Done, RunState::Failed, RunState::Canceled] {
+        for terminal in [RunState::Done, RunState::Canceled] {
             for other in [
                 RunState::Created,
                 RunState::Queued,
@@ -168,6 +178,20 @@ mod tests {
             ] {
                 assert!(!terminal.can_transition_to(other));
             }
+        }
+        // Failed 唯一合法去向是 Queued（用户重试）
+        for other in [
+            RunState::Created,
+            RunState::Preparing,
+            RunState::Running,
+            RunState::Paused,
+            RunState::Sampling,
+            RunState::Saving,
+            RunState::Done,
+            RunState::Failed,
+            RunState::Canceled,
+        ] {
+            assert!(!RunState::Failed.can_transition_to(other));
         }
     }
 

@@ -203,7 +203,12 @@ pub fn cmd_kernel_install_aitk(workspace: &Path, torch_index: &str) {
     } else {
         std::fs::create_dir_all(&kernel_dir).expect("创建 .kernel-aitk 目录");
         run(
-            &[python.to_str().unwrap(), "-m", "venv", venv.to_str().unwrap()],
+            &[
+                python.to_str().unwrap(),
+                "-m",
+                "venv",
+                venv.to_str().unwrap(),
+            ],
             None,
         )
         .expect("创建 venv 失败");
@@ -242,8 +247,18 @@ pub fn cmd_kernel_install_aitk(workspace: &Path, torch_index: &str) {
     // 3. 克隆 ai-toolkit
     println!("\n[3/5] 克隆 ai-toolkit…");
     if !repo.exists() {
-        run(&["git", "clone", "--depth", "1", AI_TOOLKIT_REPO, repo.to_str().unwrap()], None)
-            .expect("克隆 ai-toolkit 失败");
+        run(
+            &[
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                AI_TOOLKIT_REPO,
+                repo.to_str().unwrap(),
+            ],
+            None,
+        )
+        .expect("克隆 ai-toolkit 失败");
     }
 
     // 4. 依赖（requirements.txt 内含 git+diffusers 固定 commit，需联网）
@@ -304,18 +319,19 @@ pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
         .as_str()
         .expect("ai_toolkit.python 缺失")
         .to_string();
-    let sd_scripts = json.get("sd_scripts").and_then(|s| s.as_str()).map(String::from);
+    let sd_scripts = json
+        .get("sd_scripts")
+        .and_then(|s| s.as_str())
+        .map(String::from);
 
     println!("== 天地熔炉 · Krea 2 资产准备 ==");
     println!("模型目录：{}", model_dir.display());
     // 资产输出：<workspace>/models/krea2（workspace 即数据目录，如 .kernel-ws）
     let out_root = workspace.join("models/krea2");
 
-    // krea2_prepare.py 与 kernel_runner.py 同目录（assets 随 crate 分发）
-    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("tiandi-engine-compat/assets/krea2_prepare.py");
+    // krea2_prepare.py 定位：优先随可执行文件分发的 assets（exe 所在目录及其 assets 子目录），
+    // 其次 exe 旁 ../tiandi-engine-compat/assets，最后回落 dev 源码布局（CARGO_MANIFEST_DIR）。
+    let script = locate_krea2_prepare_script().expect("找不到 krea2_prepare.py");
     let mut args: Vec<String> = vec![
         script.to_str().unwrap().to_string(),
         "--model-dir".into(),
@@ -338,14 +354,23 @@ pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
         eprintln!("✗ Krea 2 资产准备失败");
         std::process::exit(1);
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let manifest_line = stdout
-        .lines()
+    // 清单行：脚本以 UTF-8 字节直写 stdout（krea2_prepare.py buffer.write）。
+    // 对该 JSON 行做严格 UTF-8 解码，失败时降级 lossy 并警告（旧脚本 GBK 输出 → 中文路径乱码）。
+    let manifest_line = output
+        .stdout
+        .split(|b| *b == b'\n')
         .rev()
-        .find(|l| l.trim_start().starts_with('{'))
+        .find(|l| l.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{'))
         .expect("未找到 krea2 清单输出");
+    let manifest_text = match std::str::from_utf8(manifest_line) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            eprintln!("⚠ krea2 清单输出含非 UTF-8 字节，可能为中文路径乱码");
+            String::from_utf8_lossy(manifest_line).into_owned()
+        }
+    };
     let krea2: serde_json::Value =
-        serde_json::from_str(manifest_line).expect("krea2 清单解析失败");
+        serde_json::from_str(&manifest_text).expect("krea2 清单解析失败");
 
     json["ai_toolkit"]["krea2"] = krea2;
     std::fs::write(&kernel_json, serde_json::to_string_pretty(&json).unwrap())
@@ -355,7 +380,8 @@ pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
 }
 
 /// 定位系统 Python。
-fn locate_python() -> PathBuf {    // 1. PATH
+fn locate_python() -> PathBuf {
+    // 1. PATH
     if Command::new("python")
         .arg("--version")
         .output()
@@ -411,4 +437,26 @@ fn run_in(dir: &Path, args: &[&str], label: Option<&str>) -> Result<(), ()> {
         return Err(());
     }
     Ok(())
+}
+
+/// 定位 krea2_prepare.py：优先随可执行文件分发（exe 所在目录及其 assets 子目录），
+/// 其次 exe 旁 `../tiandi-engine-compat/assets`，最后回落 dev 源码布局。
+fn locate_krea2_prepare_script() -> Option<PathBuf> {
+    const NAME: &str = "krea2_prepare.py";
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("assets").join(NAME));
+            candidates.push(exe_dir.join(NAME));
+            candidates.push(exe_dir.join("../tiandi-engine-compat/assets").join(NAME));
+        }
+    }
+    // 兜底：源码树（crates/tiandi-engine-compat/assets，相对 CARGO_MANIFEST_DIR）
+    candidates.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("tiandi-engine-compat/assets/krea2_prepare.py"),
+    );
+    candidates.into_iter().find(|p| p.exists())
 }

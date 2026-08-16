@@ -19,34 +19,40 @@ pub fn build_sdscripts_toml(
     // [model]
     t.push_str("[model]\n");
     t.push_str(&format!(
-        "pretrained_model_name_or_path = \"{}\"\n",
-        paths.base_model.replace('\\', "/")
+        "pretrained_model_name_or_path = {}\n",
+        toml_quote(&paths.base_model.replace('\\', "/"))
     ));
     // tokenizer 是 sd-scripts 顶层（model 相关）参数，放 [model] 段
     if let Some(tok) = &paths.tokenizer {
-        t.push_str(&format!("tokenizer = \"{}\"\n", tok.replace('\\', "/")));
+        t.push_str(&format!(
+            "tokenizer = {}\n",
+            toml_quote(&tok.replace('\\', "/"))
+        ));
     }
     if let Some(tok2) = &paths.tokenizer2 {
-        t.push_str(&format!("tokenizer2 = \"{}\"\n", tok2.replace('\\', "/")));
+        t.push_str(&format!(
+            "tokenizer2 = {}\n",
+            toml_quote(&tok2.replace('\\', "/"))
+        ));
     }
     // Anima 家族：Qwen3 TE / VAE / 分词器（模型相关顶层参数）
     if family == ModelFamily::DitAnima {
         if let Some(q) = &paths.anima_qwen3 {
-            t.push_str(&format!("qwen3 = \"{}\"\n", q.replace('\\', "/")));
+            t.push_str(&format!("qwen3 = {}\n", toml_quote(&q.replace('\\', "/"))));
         }
         if let Some(v) = &paths.anima_vae {
-            t.push_str(&format!("vae = \"{}\"\n", v.replace('\\', "/")));
+            t.push_str(&format!("vae = {}\n", toml_quote(&v.replace('\\', "/"))));
         }
         if let Some(t5) = &paths.anima_t5_tokenizer {
             t.push_str(&format!(
-                "t5_tokenizer_path = \"{}\"\n",
-                t5.replace('\\', "/")
+                "t5_tokenizer_path = {}\n",
+                toml_quote(&t5.replace('\\', "/"))
             ));
         }
         if let Some(qt) = &paths.anima_qwen3_tokenizer {
             t.push_str(&format!(
-                "qwen3_tokenizer_path = \"{}\"\n",
-                qt.replace('\\', "/")
+                "qwen3_tokenizer_path = {}\n",
+                toml_quote(&qt.replace('\\', "/"))
             ));
         }
     }
@@ -54,12 +60,10 @@ pub fn build_sdscripts_toml(
 
     // [network]
     t.push_str("[network]\n");
-    // Anima 家族网络：lora_anima / tlora_anima（kohya 生态）
+    // Anima 家族网络：lora_anima（实测 068bcd7 networks/ 无 tlora_anima.py，
+    // T-LoRA 与 LoRA 统一走 networks.lora_anima，kohya 生态 Anima 文档同此）
     let network_module = if family == ModelFamily::DitAnima {
-        match recipe.network_type {
-            tiandi_recipe::NetworkType::Tlora => "tlora_anima",
-            _ => "lora_anima",
-        }
+        "lora_anima"
     } else {
         network_module(recipe.network_type)
     };
@@ -86,7 +90,7 @@ pub fn build_sdscripts_toml(
         t.push_str(&format!("conv_alpha = {v}\n"));
     }
     if let Some(bw) = &recipe.block_weights {
-        t.push_str(&format!("down_lr_weight = \"{}\"\n", bw));
+        t.push_str(&format!("down_lr_weight = {}\n", toml_quote(bw)));
     }
     // Anima：attn 模式（torch 最稳，Windows 下 xformers 可选）
     if family == ModelFamily::DitAnima {
@@ -106,6 +110,9 @@ pub fn build_sdscripts_toml(
     // [training]
     t.push_str("[training]\n");
     t.push_str(&format!("learning_rate = {}\n", recipe.learning_rate));
+    // train_batch_size：--config_file 解析为 argparse 选项名（train_util.py:4013，
+    // 实测 068bcd7 无 --batch_size 选项；dataset 段的 batch_size 是 dataset_config 专用键）
+    t.push_str(&format!("train_batch_size = {}\n", recipe.batch_size));
     // sd-scripts 规则：缓存 TE 输出时只能训练 UNet（TE 冻结）
     if recipe.cache_text_encoder_outputs {
         t.push_str("text_encoder_lr = 0\n");
@@ -120,7 +127,10 @@ pub fn build_sdscripts_toml(
         "lr_scheduler = \"{}\"\n",
         recipe.lr_scheduler.label()
     ));
-    t.push_str(&format!("lr_warmup_steps = {}\n", lr_warmup_steps(recipe)));
+    t.push_str(&format!(
+        "lr_warmup_steps = {}\n",
+        lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
+    ));
     t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
     t.push_str(&format!("seed = {}\n", recipe.seed));
     t.push_str(&format!(
@@ -207,16 +217,22 @@ pub fn build_sdscripts_toml(
         t.push_str(&format!("max_train_steps = {v}\n"));
     }
     t.push_str(&format!(
-        "output_dir = \"{}\"\n",
-        paths.output_dir.replace('\\', "/")
+        "output_dir = {}\n",
+        toml_quote(&paths.output_dir.replace('\\', "/"))
     ));
-    t.push_str(&format!("output_name = \"{}\"\n", paths.output_name));
+    t.push_str(&format!(
+        "output_name = {}\n",
+        toml_quote(&paths.output_name)
+    ));
     t.push_str("save_model_as = \"safetensors\"\n");
     if let Some(resume) = &paths.resume {
-        t.push_str(&format!("resume = \"{}\"\n", resume.replace('\\', "/")));
+        t.push_str(&format!(
+            "resume = {}\n",
+            toml_quote(&resume.replace('\\', "/"))
+        ));
     }
     if let Some(tw) = &recipe.trigger_word {
-        t.push_str(&format!("trigger_word = \"{tw}\"\n"));
+        t.push_str(&format!("trigger_word = {}\n", toml_quote(tw)));
     }
     // 预测目标：SDXL 族映射为 sd-scripts v_parameterization（v 预测模型必须开启）
     if family == ModelFamily::Sdxl1 {
@@ -228,7 +244,9 @@ pub fn build_sdscripts_toml(
                 t.push_str("v_parameterization = false\n");
             }
             Some(tiandi_recipe::PredictionType::Sample) => {
-                t.push_str("# prediction_type=sample：sd-scripts SDXL 路径不支持，按 epsilon 处理\n");
+                t.push_str(
+                    "# prediction_type=sample：sd-scripts SDXL 路径不支持，按 epsilon 处理\n",
+                );
             }
             None => {}
         }
@@ -243,11 +261,14 @@ pub fn build_sdscripts_toml(
     // [dataset]
     t.push_str("[dataset]\n");
     t.push_str(&format!(
-        "train_data_dir = \"{}\"\n",
-        paths.dataset_dir.replace('\\', "/")
+        "train_data_dir = {}\n",
+        toml_quote(&paths.dataset_dir.replace('\\', "/"))
     ));
     // sd-scripts 的 resolution 参数为字符串（"1024" 或 "1024,768" 多分辨率）
-    t.push_str(&format!("resolution = \"{}\"\n", recipe.resolution));
+    t.push_str(&format!(
+        "resolution = {}\n",
+        toml_quote(&recipe.resolution.to_string())
+    ));
     t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
     if let Some(v) = recipe.num_repeats {
         if v > 1 {
@@ -261,11 +282,14 @@ pub fn build_sdscripts_toml(
         t.push_str("[sampling]\n");
         t.push_str("sample_prompts = \"\"\"\n");
         for p in &recipe.sample_prompts {
-            t.push_str(p);
+            t.push_str(&toml_multiline_escape(p));
             t.push('\n');
         }
         t.push_str("\"\"\"\n");
-        t.push_str(&format!("sample_sampler = \"{}\"\n", recipe.sample_sampler));
+        t.push_str(&format!(
+            "sample_sampler = {}\n",
+            toml_quote(&recipe.sample_sampler)
+        ));
         if let Some(v) = recipe.sample_steps {
             t.push_str(&format!("sample_steps = {v}\n"));
         }
@@ -273,7 +297,7 @@ pub fn build_sdscripts_toml(
             t.push_str(&format!("guidance_scale = {v}\n"));
         }
         if let Some(v) = &recipe.negative_prompt {
-            t.push_str(&format!("negative_prompt = \"{v}\"\n"));
+            t.push_str(&format!("negative_prompt = {}\n", toml_quote(v)));
         }
         t.push('\n');
     }
@@ -282,8 +306,8 @@ pub fn build_sdscripts_toml(
     t.push_str("[logging]\n");
     t.push_str("log_with = \"tensorboard\"\n");
     t.push_str(&format!(
-        "logging_dir = \"{}\"\n",
-        paths.logging_dir.replace('\\', "/")
+        "logging_dir = {}\n",
+        toml_quote(&paths.logging_dir.replace('\\', "/"))
     ));
     t.push('\n');
 
@@ -303,32 +327,38 @@ pub fn build_sdscripts_toml_full(
     // [model]
     t.push_str("[model]\n");
     t.push_str(&format!(
-        "pretrained_model_name_or_path = \"{}\"\n",
-        paths.base_model.replace('\\', "/")
+        "pretrained_model_name_or_path = {}\n",
+        toml_quote(&paths.base_model.replace('\\', "/"))
     ));
     if let Some(tok) = &paths.tokenizer {
-        t.push_str(&format!("tokenizer = \"{}\"\n", tok.replace('\\', "/")));
+        t.push_str(&format!(
+            "tokenizer = {}\n",
+            toml_quote(&tok.replace('\\', "/"))
+        ));
     }
     if let Some(tok2) = &paths.tokenizer2 {
-        t.push_str(&format!("tokenizer2 = \"{}\"\n", tok2.replace('\\', "/")));
+        t.push_str(&format!(
+            "tokenizer2 = {}\n",
+            toml_quote(&tok2.replace('\\', "/"))
+        ));
     }
     if family == ModelFamily::DitAnima {
         if let Some(q) = &paths.anima_qwen3 {
-            t.push_str(&format!("qwen3 = \"{}\"\n", q.replace('\\', "/")));
+            t.push_str(&format!("qwen3 = {}\n", toml_quote(&q.replace('\\', "/"))));
         }
         if let Some(v) = &paths.anima_vae {
-            t.push_str(&format!("vae = \"{}\"\n", v.replace('\\', "/")));
+            t.push_str(&format!("vae = {}\n", toml_quote(&v.replace('\\', "/"))));
         }
         if let Some(t5) = &paths.anima_t5_tokenizer {
             t.push_str(&format!(
-                "t5_tokenizer_path = \"{}\"\n",
-                t5.replace('\\', "/")
+                "t5_tokenizer_path = {}\n",
+                toml_quote(&t5.replace('\\', "/"))
             ));
         }
         if let Some(qt) = &paths.anima_qwen3_tokenizer {
             t.push_str(&format!(
-                "qwen3_tokenizer_path = \"{}\"\n",
-                qt.replace('\\', "/")
+                "qwen3_tokenizer_path = {}\n",
+                toml_quote(&qt.replace('\\', "/"))
             ));
         }
     }
@@ -345,6 +375,9 @@ pub fn build_sdscripts_toml_full(
     // [training]
     t.push_str("[training]\n");
     t.push_str(&format!("learning_rate = {}\n", recipe.learning_rate));
+    // train_batch_size：--config_file 解析为 argparse 选项名（train_util.py:4013，
+    // 实测 068bcd7 无 --batch_size 选项；dataset 段的 batch_size 是 dataset_config 专用键）
+    t.push_str(&format!("train_batch_size = {}\n", recipe.batch_size));
     if train_text_encoder {
         t.push_str("train_text_encoder = true\n");
         if let Some(te) = recipe.text_encoder_lr {
@@ -361,7 +394,10 @@ pub fn build_sdscripts_toml_full(
         "lr_scheduler = \"{}\"\n",
         recipe.lr_scheduler.label()
     ));
-    t.push_str(&format!("lr_warmup_steps = {}\n", lr_warmup_steps(recipe)));
+    t.push_str(&format!(
+        "lr_warmup_steps = {}\n",
+        lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
+    ));
     t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
     t.push_str(&format!("seed = {}\n", recipe.seed));
     t.push_str(&format!(
@@ -389,7 +425,10 @@ pub fn build_sdscripts_toml_full(
         t.push_str(&format!("noise_offset = {no}\n"));
     }
     // 全量训练：latent 缓存可用（TE 不训时）
-    t.push_str(&format!("cache_latents = {}\n", recipe.cache_latents && !train_text_encoder));
+    t.push_str(&format!(
+        "cache_latents = {}\n",
+        recipe.cache_latents && !train_text_encoder
+    ));
     t.push_str(&format!(
         "save_every_n_epochs = {}\n",
         recipe.save_every_n_epochs
@@ -398,13 +437,19 @@ pub fn build_sdscripts_toml_full(
         t.push_str(&format!("max_train_steps = {v}\n"));
     }
     t.push_str(&format!(
-        "output_dir = \"{}\"\n",
-        paths.output_dir.replace('\\', "/")
+        "output_dir = {}\n",
+        toml_quote(&paths.output_dir.replace('\\', "/"))
     ));
-    t.push_str(&format!("output_name = \"{}\"\n", paths.output_name));
+    t.push_str(&format!(
+        "output_name = {}\n",
+        toml_quote(&paths.output_name)
+    ));
     t.push_str("save_model_as = \"safetensors\"\n");
     if let Some(resume) = &paths.resume {
-        t.push_str(&format!("resume = \"{}\"\n", resume.replace('\\', "/")));
+        t.push_str(&format!(
+            "resume = {}\n",
+            toml_quote(&resume.replace('\\', "/"))
+        ));
     }
     if family == ModelFamily::Sdxl1 {
         match recipe.prediction_type {
@@ -422,10 +467,13 @@ pub fn build_sdscripts_toml_full(
     // [dataset]
     t.push_str("[dataset]\n");
     t.push_str(&format!(
-        "train_data_dir = \"{}\"\n",
-        paths.dataset_dir.replace('\\', "/")
+        "train_data_dir = {}\n",
+        toml_quote(&paths.dataset_dir.replace('\\', "/"))
     ));
-    t.push_str(&format!("resolution = \"{}\"\n", recipe.resolution));
+    t.push_str(&format!(
+        "resolution = {}\n",
+        toml_quote(&recipe.resolution.to_string())
+    ));
     t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
     if let Some(v) = recipe.num_repeats {
         if v > 1 {
@@ -439,11 +487,14 @@ pub fn build_sdscripts_toml_full(
         t.push_str("[sampling]\n");
         t.push_str("sample_prompts = \"\"\"\n");
         for p in &recipe.sample_prompts {
-            t.push_str(p);
+            t.push_str(&toml_multiline_escape(p));
             t.push('\n');
         }
         t.push_str("\"\"\"\n");
-        t.push_str(&format!("sample_sampler = \"{}\"\n", recipe.sample_sampler));
+        t.push_str(&format!(
+            "sample_sampler = {}\n",
+            toml_quote(&recipe.sample_sampler)
+        ));
         if let Some(v) = recipe.sample_steps {
             t.push_str(&format!("sample_steps = {v}\n"));
         }
@@ -454,8 +505,8 @@ pub fn build_sdscripts_toml_full(
     t.push_str("[logging]\n");
     t.push_str("log_with = \"tensorboard\"\n");
     t.push_str(&format!(
-        "logging_dir = \"{}\"\n",
-        paths.logging_dir.replace('\\', "/")
+        "logging_dir = {}\n",
+        toml_quote(&paths.logging_dir.replace('\\', "/"))
     ));
     t.push('\n');
 
@@ -485,10 +536,94 @@ pub struct TrainPaths {
     pub anima_qwen3_tokenizer: Option<String>,
 }
 
-/// 预热步数：按总步数比例换算（M1 估算：epochs × 1000 步/轮基准）。
-pub fn lr_warmup_steps(recipe: &RecipeData) -> u64 {
-    let est_total = recipe.max_train_epochs as f64 * 1000.0;
+/// 预热步数：按总步数比例换算。
+///
+/// `dataset_images`：数据集图片数（Some(图片数) 时按真实规模估算总步数：
+/// `图片数 × epochs × num_repeats / batch_size`；None = 拿不到规模信息，
+/// 保留旧兜底估算 epochs × 1000 步/轮基准）。
+pub fn lr_warmup_steps(recipe: &RecipeData, dataset_images: Option<u64>) -> u64 {
+    let est_total = match dataset_images {
+        Some(images) => {
+            let images = images.max(1) as f64;
+            let repeats = recipe.num_repeats.unwrap_or(1).max(1) as f64;
+            let batch = recipe.batch_size.max(1) as f64;
+            // 每轮步数 = 图片数 × 重复次数 / batch_size
+            let per_epoch = images * repeats / batch;
+            per_epoch * recipe.max_train_epochs as f64
+        }
+        None => recipe.max_train_epochs as f64 * 1000.0,
+    };
     (est_total * recipe.lr_warmup_ratio).round() as u64
+}
+
+/// 扫描数据集目录图片数（与 lib.rs dataset_image_count 规则一致；
+/// 目录不可读或无图 → None，调用方回退旧估算）。
+fn dataset_image_count(dataset_dir: &str) -> Option<u64> {
+    const EXTS: [&str; 5] = [".jpg", ".jpeg", ".png", ".webp", ".bmp"];
+    let mut count = 0u64;
+    let mut stack = vec![std::path::PathBuf::from(dataset_dir)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name == "thumbs" || name == ".cache" {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if EXTS.iter().any(|e| name.ends_with(e)) {
+                count += 1;
+            }
+        }
+    }
+    (count > 0).then_some(count)
+}
+
+/// TOML 基本字符串：双引号包裹，转义 `\` 与 `"`。
+fn toml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// TOML 多行基本字符串（`"""..."""`）内的行转义：转义 `\` 与 `"""` 序列
+/// （`\` 在 TOML 多行字符串中是转义起始符；`"""` 会提前终止字符串）。
+fn toml_multiline_escape(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => {
+                // 三个及以上连续引号需转义，避免意外终止多行字符串
+                let mut n = 1;
+                while chars.peek() == Some(&'"') {
+                    chars.next();
+                    n += 1;
+                }
+                if n >= 3 {
+                    out.push_str("\\\"\\\"\\\"");
+                } else {
+                    for _ in 0..n {
+                        out.push('"');
+                    }
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn network_module(t: tiandi_recipe::NetworkType) -> &'static str {
@@ -601,7 +736,97 @@ mod tests {
             max_train_epochs: 10,
             ..RecipeData::default()
         };
-        assert_eq!(lr_warmup_steps(&recipe), 1000);
+        // 拿不到数据集规模 → 旧兜底估算（epochs × 1000）
+        assert_eq!(lr_warmup_steps(&recipe, None), 1000);
+    }
+
+    #[test]
+    fn warmup_steps_use_dataset_image_count_when_known() {
+        let recipe = RecipeData {
+            lr_warmup_ratio: 0.1,
+            max_train_epochs: 10,
+            num_repeats: Some(2),
+            batch_size: 4,
+            ..RecipeData::default()
+        };
+        // 总步数 = 100 图 × 10 轮 × 2 重复 / 4 batch = 500；预热 10% = 50
+        assert_eq!(lr_warmup_steps(&recipe, Some(100)), 50);
+        // batch_size 兜底 ≥ 1（0 时按 1 算，避免除零）
+        let zero_batch = RecipeData {
+            lr_warmup_ratio: 0.1,
+            max_train_epochs: 1,
+            batch_size: 0,
+            ..RecipeData::default()
+        };
+        assert_eq!(lr_warmup_steps(&zero_batch, Some(100)), 10);
+    }
+
+    #[test]
+    fn dataset_image_count_scans_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::create_dir_all(dir.path().join("thumbs")).unwrap();
+        std::fs::write(dir.path().join("a.jpg"), b"x").unwrap();
+        std::fs::write(dir.path().join("b.PNG"), b"x").unwrap();
+        std::fs::write(dir.path().join("sub/c.webp"), b"x").unwrap();
+        std::fs::write(dir.path().join("note.txt"), b"x").unwrap();
+        std::fs::write(dir.path().join("thumbs/d.jpg"), b"x").unwrap();
+        assert_eq!(dataset_image_count(dir.path().to_str().unwrap()), Some(3));
+        // 目录不存在 → None（回退旧估算）
+        assert_eq!(dataset_image_count("Z:/no/such/dir"), None);
+    }
+
+    #[test]
+    fn train_batch_size_emitted_in_training() {
+        let recipe = RecipeData {
+            batch_size: 4,
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
+        assert!(toml.contains("train_batch_size = 4"), "{toml}");
+        let full = build_sdscripts_toml_full(&recipe, ModelFamily::Sdxl1, &paths(), false);
+        assert!(full.contains("train_batch_size = 4"), "{full}");
+    }
+
+    #[test]
+    fn anima_tlora_maps_to_lora_anima() {
+        let recipe = RecipeData {
+            network_type: tiandi_recipe::NetworkType::Tlora,
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::DitAnima, &paths());
+        assert!(
+            toml.contains("network_module = \"networks.lora_anima\""),
+            "{toml}"
+        );
+        assert!(!toml.contains("tlora_anima"), "{toml}");
+        // Anima + Lora 同样走 lora_anima
+        let lora = RecipeData {
+            network_type: tiandi_recipe::NetworkType::Lora,
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&lora, ModelFamily::DitAnima, &paths());
+        assert!(toml.contains("network_module = \"networks.lora_anima\""));
+    }
+
+    #[test]
+    fn toml_strings_are_escaped() {
+        // 含引号/反斜杠的路径与提示词必须被转义（可被 toml 重新解析）
+        let recipe = RecipeData {
+            trigger_word: Some("say \"hi\" \\ ok".into()),
+            sample_prompts: vec!["a \"quote\" prompt".into(), "back\\slash".into()],
+            negative_prompt: Some("bad \"x\"".into()),
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
+        assert!(
+            toml.contains(r#"trigger_word = "say \"hi\" \\ ok""#),
+            "{toml}"
+        );
+        assert!(toml.contains("sample_prompts = \"\"\"\n"), "{toml}");
+        assert!(toml.contains("a \"quote\" prompt"), "{toml}");
+        assert!(toml.contains("back\\\\slash"), "{toml}");
+        assert!(toml.contains(r#"negative_prompt = "bad \"x\"""#), "{toml}");
     }
 
     #[test]

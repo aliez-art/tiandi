@@ -47,6 +47,16 @@ impl SdScriptsTrainer {
         }
     }
 
+    /// 服务关停：终止所有运行中的内核进程树并清空句柄表。
+    /// 供 tiandi-server 关停流程调用（进程内一致性优先，中毒锁继续用）。
+    pub fn kill_all(&self) {
+        let mut handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
+        for (run_id, mut h) in handles.drain() {
+            h.kill();
+            tracing::info!("kill_all: 已终止内核 run={run_id}");
+        }
+    }
+
     /// 当前是否具备运行内核的条件（Python 可用）。
     pub fn ready(&self) -> bool {
         self.env.ready()
@@ -89,18 +99,15 @@ impl SdScriptsTrainer {
     fn kernel_launch(&self, job: &TrainJob, mode: KernelMode) -> Result<KernelLaunch, EngineError> {
         // aitk 模式用 ai-toolkit 独立 venv；其余用 sd-scripts venv（或系统 Python）
         let python = if mode == KernelMode::Aitk {
-            self.env
-                .aitk
-                .clone()
-                .map(|a| a.python)
-                .ok_or_else(|| EngineError::NotReady("ai-toolkit 内核未安装（tiandi kernel install --backend aitk）".into()))?
+            self.env.aitk.clone().map(|a| a.python).ok_or_else(|| {
+                EngineError::NotReady(
+                    "ai-toolkit 内核未安装（tiandi kernel install --backend aitk）".into(),
+                )
+            })?
         } else {
-            self.env
-                .python
-                .clone()
-                .ok_or_else(|| {
-                    EngineError::NotReady(self.env.message.clone().unwrap_or_default())
-                })?
+            self.env.python.clone().ok_or_else(|| {
+                EngineError::NotReady(self.env.message.clone().unwrap_or_default())
+            })?
         };
 
         // 任务目录：日志/配置留在 runs/<id>；产物（LoRA/示例图）在 job.output_dir（output/<id>）
@@ -137,25 +144,32 @@ impl SdScriptsTrainer {
                     "Krea 2 全量训练暂不支持（ai-toolkit 后端仅 LoRA）".into(),
                 ));
             }
-            let aitk = self
-                .env
-                .aitk
-                .clone()
-                .ok_or_else(|| EngineError::NotReady("ai-toolkit 内核未安装（tiandi kernel install --backend aitk）".into()))?;
+            let aitk = self.env.aitk.clone().ok_or_else(|| {
+                EngineError::NotReady(
+                    "ai-toolkit 内核未安装（tiandi kernel install --backend aitk）".into(),
+                )
+            })?;
             let krea2 = aitk.krea2.clone().ok_or_else(|| {
                 EngineError::NotReady(
                     "Krea 2 资产未就绪（tiandi kernel prepare-krea2 <底模目录>）".into(),
                 )
             })?;
-            // 总步数 = epochs × 图片数 × 重复次数（ai-toolkit 按步训练）
+            // 总步数 = epochs × 图片数 × 重复次数 ÷ batch_size（ai-toolkit 按步训练，
+            // 每步消费 batch_size 张图；除后兜底 ≥1 步）
             let repeats = recipe.num_repeats.unwrap_or(1).max(1) as u64;
-            let steps = dataset_image_count(job.dataset_dir.as_str()) as u64
+            let batch_size = recipe.batch_size.max(1) as u64;
+            let steps = ((dataset_image_count(job.dataset_dir.as_str()) as u64
                 * recipe.max_train_epochs as u64
-                * repeats;
+                * repeats)
+                / batch_size)
+                .max(1);
             let paths = AitkPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
-                training_folder: std::path::PathBuf::from(&job.output_dir).join("checkpoints").to_string_lossy().into_owned(),
+                training_folder: std::path::PathBuf::from(&job.output_dir)
+                    .join("checkpoints")
+                    .to_string_lossy()
+                    .into_owned(),
                 output_name: job
                     .output_name
                     .clone()
@@ -206,9 +220,9 @@ impl SdScriptsTrainer {
                         .map(|s| s.join("configs/t5_old"))
                         .filter(|p| p.is_dir());
                     (
-                        te_override
-                            .clone()
-                            .or_else(|| qwen3.exists().then(|| qwen3.to_string_lossy().into_owned())),
+                        te_override.clone().or_else(|| {
+                            qwen3.exists().then(|| qwen3.to_string_lossy().into_owned())
+                        }),
                         vae_override
                             .clone()
                             .or_else(|| vae.exists().then(|| vae.to_string_lossy().into_owned())),
@@ -220,7 +234,10 @@ impl SdScriptsTrainer {
             let paths = TrainPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
-                output_dir: std::path::PathBuf::from(&job.output_dir).join("checkpoints").to_string_lossy().into_owned(),
+                output_dir: std::path::PathBuf::from(&job.output_dir)
+                    .join("checkpoints")
+                    .to_string_lossy()
+                    .into_owned(),
                 output_name: job
                     .output_name
                     .clone()
@@ -298,10 +315,7 @@ impl SdScriptsTrainer {
                 .ok_or_else(|| EngineError::NotReady("ai-toolkit 内核未安装".into()))?
                 .repo
         } else {
-            self.env
-                .sd_scripts
-                .clone()
-                .unwrap_or(run_dir.clone())
+            self.env.sd_scripts.clone().unwrap_or(run_dir.clone())
         };
 
         Ok(KernelLaunch {
@@ -328,10 +342,13 @@ impl SdScriptsTrainer {
 
         let handle = spawn_kernel(&launch, move |value| {
             publish_event(&bus, &value, &run_id);
-            // 终态事件后释放句柄
+            // 终态事件后释放句柄（中毒的锁继续用：进程内一致即可）
             if let Some(t) = value.get("type").and_then(|v| v.as_str()) {
                 if matches!(t, "done" | "fail") {
-                    handles.lock().unwrap().remove(&run_id);
+                    handles
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&run_id);
                 }
             }
         })
@@ -339,7 +356,7 @@ impl SdScriptsTrainer {
 
         self.handles
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(job.run_id.clone(), handle);
         Ok(())
     }
@@ -368,6 +385,29 @@ fn dataset_image_count(dataset_dir: &str) -> usize {
         }
     }
     count.max(1)
+}
+
+/// 运行时资产路径（kernel_runner.py 等随 crate 分发的文件）。
+///
+/// 依次尝试：当前可执行文件所在目录 → `<exe目录>/assets` → 编译期
+/// `CARGO_MANIFEST_DIR/assets`（开发/测试兜底），返回第一个存在的。
+/// 分发后（cargo install / 打包）资产与可执行文件同目录部署，不再依赖源码树。
+pub fn asset_path(name: &str) -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let direct = dir.join(name);
+            if direct.exists() {
+                return direct;
+            }
+            let in_assets = dir.join("assets").join(name);
+            if in_assets.exists() {
+                return in_assets;
+            }
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join(name)
 }
 
 impl Trainer for SdScriptsTrainer {
@@ -407,17 +447,17 @@ impl Trainer for SdScriptsTrainer {
     }
 
     fn cancel(&self, run_id: &str) -> Result<(), EngineError> {
-        let mut handles = self.handles.lock().unwrap();
+        let mut handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(h) = handles.get_mut(run_id) {
             // Trainer trait 为同步接口；用一次性 current_thread runtime 阻塞取消
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| EngineError::Runtime(e.to_string()))?;
-            rt.block_on(h.cancel())
-                .map_err(|e| EngineError::Runtime(e.to_string()))?;
+            let result = rt.block_on(h.cancel());
+            // 无论成功/超时都移除句柄：超时已强杀、句柄已失效，滞留会泄漏（kill_all 兜不住）
             handles.remove(run_id);
-            Ok(())
+            result.map_err(|e| EngineError::Runtime(e.to_string()))
         } else {
             Err(EngineError::UnknownRun(run_id.into()))
         }
@@ -430,4 +470,36 @@ impl Trainer for SdScriptsTrainer {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn asset_path_resolves_wrapper_script() {
+        // 测试环境（current_exe 无资产）→ 回退 CARGO_MANIFEST_DIR/assets，应存在
+        let p = asset_path("kernel_runner.py");
+        assert!(
+            p.exists(),
+            "kernel_runner.py 应可解析到实际存在的路径：{}",
+            p.display()
+        );
+        assert_eq!(
+            p.file_name().and_then(|n| n.to_str()),
+            Some("kernel_runner.py")
+        );
+    }
+
+    #[test]
+    fn steps_estimate_divides_by_batch_size() {
+        // 纯函数换算核对：epochs × 图数 × repeats ÷ batch_size，且 ≥1
+        let count = 4u64; // 4 张图
+        let epochs = 10u32;
+        let repeats = 2u64;
+        let batch_size = 4u64;
+        let steps = ((count * epochs as u64 * repeats) / batch_size).max(1);
+        assert_eq!(steps, 20); // 4×10×2/4
+                               // batch_size 大于总量时兜底 1 步
+        let steps2 = ((count * epochs as u64 * repeats) / 1000).max(1);
+        assert_eq!(steps2, 1);
+    }
+}

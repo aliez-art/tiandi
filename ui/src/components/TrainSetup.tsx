@@ -6,12 +6,12 @@ import {
   deleteRecipe,
   listDatasets,
   listModels,
-  listPresets,
   listRecipes,
+  pickFile,
+  registerModel,
   startRun,
   type BaseModel,
   type Dataset,
-  type PresetView,
   type RecipeView,
 } from '../api'
 
@@ -421,9 +421,8 @@ function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unkn
   }
 }
 
-/** 丹方管理：内置预设 + 我的丹方列表 + 完整参数新建表单。 */
+/** 丹方管理：我的丹方列表 + 完整参数新建表单。 */
 export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeView) => void }) {
-  const [presets, setPresets] = useState<PresetView[]>([])
   const [recipes, setRecipes] = useState<RecipeView[]>([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -433,8 +432,7 @@ export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeV
   const [data, setData] = useState<Record<string, unknown>>(defaultData())
 
   const refresh = async () => {
-    const [p, r] = await Promise.all([listPresets(), listRecipes()])
-    setPresets(p)
+    const r = await listRecipes()
     setRecipes(r)
   }
 
@@ -481,38 +479,13 @@ export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeV
     }
   }
 
-  const applyPreset = (p: PresetView) => {
-    setFamily(p.family)
-    setData({ ...defaultData(), ...p.data })
-    setMsg(`已载入预设「${p.name}」，可调整后保存`)
-  }
-
   return (
     <Dialog title="丹方管理" onClose={props.onClose} wide>
-      {/* 内置预设 */}
-      <section className="recipe-sec">
-        <h3>内置预设（一键套用）</h3>
-        <div className="preset-grid">
-          {presets.map((p) => (
-            <div key={p.name} className="preset-card">
-              <div className="preset-name">
-                {p.name}
-                <span className="family-pill">{FAMILY_LABEL[p.family] ?? p.family}</span>
-              </div>
-              <p className="hint">{p.description}</p>
-              <button className="secondary" onClick={() => applyPreset(p)}>
-                套用
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
-
       {/* 我的丹方 */}
       <section className="recipe-sec">
         <h3>我的丹方</h3>
         {recipes.length === 0 ? (
-          <p className="hint">还没有自定义丹方，从预设套用或下方新建。</p>
+          <p className="hint">还没有丹方，在下方填写参数并保存。</p>
         ) : (
           <ul className="runs datasets">
             {recipes.map((r) => (
@@ -579,34 +552,53 @@ export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeV
   )
 }
 
-/** 新建炼丹：选模型 → 选数据集 → 选丹方 → 点火。 */
-export function NewRunDialog(props: { onClose: () => void; onCreated: (runId: string) => void }) {
+/** 扁平操作条：选底模（文件对话框）→ 选数据集 → 选丹方 → 点火。 */
+export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRecipes: () => void }) {
   const [models, setModels] = useState<BaseModel[]>([])
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [recipes, setRecipes] = useState<RecipeView[]>([])
+  const [family, setFamily] = useState('sdxl1')
   const [modelId, setModelId] = useState('')
   const [datasetId, setDatasetId] = useState('')
   const [recipeId, setRecipeId] = useState('')
-  const [showRecipes, setShowRecipes] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
+  const refresh = async () => {
+    const [m, d, r] = await Promise.all([listModels(), listDatasets(), listRecipes()])
+    setModels(m)
+    setDatasets(d)
+    setRecipes(r)
+    setModelId((prev) => prev || m[0]?.id || '')
+    setDatasetId((prev) => prev || d[0]?.id || '')
+    setRecipeId((prev) => prev || r[0]?.id || '')
+  }
+
   useEffect(() => {
-    void Promise.all([listModels(), listDatasets(), listRecipes()])
-      .then(([m, d, r]) => {
-        setModels(m)
-        setDatasets(d)
-        setRecipes(r)
-        setModelId((prev) => prev || m[0]?.id || '')
-        setDatasetId((prev) => prev || d[0]?.id || '')
-        setRecipeId((prev) => prev || r[0]?.id || '')
-      })
-      .catch(() => {})
+    void refresh().catch(() => {})
   }, [])
+
+  const onPickModel = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const path = await pickFile()
+      if (!path) return // 用户取消
+      const base = path.split(/[\\/]/).pop()?.replace(/\.safetensors$/i, '') ?? '模型'
+      const m = await registerModel({ name: base, family, path })
+      setModels((prev) => [m, ...prev])
+      setModelId(m.id)
+      setMsg(`已选底模：${base}`)
+    } catch (e) {
+      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const onFire = async () => {
     if (!modelId || !datasetId || !recipeId) {
-      setMsg('请先选齐模型、数据集与丹方')
+      setMsg('请先选齐底模、数据集与丹方')
       return
     }
     setBusy(true)
@@ -618,7 +610,7 @@ export function NewRunDialog(props: { onClose: () => void; onCreated: (runId: st
         base_model_id: modelId,
       })
       await startRun(run.id)
-      setMsg('已入队，scheduler 会自动点火训练')
+      setMsg('已入队，自动开始炼丹')
       props.onCreated(run.id)
     } catch (e) {
       setMsg(`点火失败：${e instanceof Error ? e.message : String(e)}`)
@@ -627,73 +619,53 @@ export function NewRunDialog(props: { onClose: () => void; onCreated: (runId: st
     }
   }
 
-  const pickRecipe = (r: RecipeView) => {
-    setRecipeId(r.id)
-    setShowRecipes(false)
-  }
+  const selectedModel = models.find((m) => m.id === modelId) ?? null
 
   return (
-    <Dialog title="新建炼丹" onClose={props.onClose}>
-      {showRecipes ? (
-        <RecipeManager onClose={() => setShowRecipes(false)} onPick={pickRecipe} />
-      ) : (
-        <>
-          <div className="form-grid">
-            <label className="field wide">
-              <span>基底模型</span>
-              {models.length === 0 ? (
-                <p className="hint">暂无模型 → 请到「药材」页注册</p>
-              ) : (
-                <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}（{FAMILY_LABEL[m.family] ?? m.family}）
-                    </option>
-                  ))}
-                </select>
-              )}
-            </label>
-            <label className="field wide">
-              <span>数据集</span>
-              {datasets.length === 0 ? (
-                <p className="hint">暂无数据集 → 请到「药材」页注册并扫描</p>
-              ) : (
-                <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-                  {datasets.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}（{d.image_count} 张）
-                    </option>
-                  ))}
-                </select>
-              )}
-            </label>
-            <label className="field wide">
-              <span>丹方</span>
-              {recipes.length === 0 ? (
-                <p className="hint">暂无丹方 → 点下方「管理丹方」创建</p>
-              ) : (
-                <select value={recipeId} onChange={(e) => setRecipeId(e.target.value)}>
-                  {recipes.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}（{FAMILY_LABEL[r.family] ?? r.family}）
-                    </option>
-                  ))}
-                </select>
-              )}
-            </label>
-          </div>
-          <div className="actions">
-            <button onClick={() => void onFire()} disabled={busy} className="primary">
-              {busy ? '点火中…' : '点火炼丹'}
-            </button>
-            <button onClick={() => setShowRecipes(true)} className="secondary">
-              管理丹方
-            </button>
-          </div>
-          {msg && <p className="status-line">{msg}</p>}
-          <p className="hint">提示：任务入队后会自动串行训练；同一时间只跑一个任务。</p>
-        </>
-      )}
-    </Dialog>
+    <div className="firebar panel">
+      <div className="firebar-row">
+        <button onClick={() => void onPickModel()} disabled={busy} className="secondary">
+          选择底模…
+        </button>
+        <select value={family} onChange={(e) => setFamily(e.target.value)} title="底模所属模型族">
+          <option value="sdxl1">SDXL</option>
+          <option value="dit_anima">Anima</option>
+          <option value="dit_krea2">Krea 2</option>
+        </select>
+        <span className={`firebar-model ${selectedModel ? '' : 'dim'}`} title={selectedModel?.path ?? ''}>
+          {selectedModel ? selectedModel.name : '未选择底模'}
+        </span>
+        <span className="firebar-sep">│</span>
+        <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+          {datasets.length === 0 ? (
+            <option value="">（先到「药材」页注册数据集）</option>
+          ) : (
+            datasets.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}（{d.image_count} 张）
+              </option>
+            ))
+          )}
+        </select>
+        <select value={recipeId} onChange={(e) => setRecipeId(e.target.value)}>
+          {recipes.length === 0 ? (
+            <option value="">（暂无丹方，点「丹方」创建）</option>
+          ) : (
+            recipes.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))
+          )}
+        </select>
+        <button onClick={props.onOpenRecipes} className="secondary">
+          丹方
+        </button>
+        <button onClick={() => void onFire()} disabled={busy} className="primary">
+          {busy ? '处理中…' : '点火炼丹'}
+        </button>
+      </div>
+      {msg && <div className="firebar-msg">{msg}</div>}
+    </div>
   )
 }

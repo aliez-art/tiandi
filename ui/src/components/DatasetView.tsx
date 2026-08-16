@@ -3,6 +3,8 @@ import {
   createDataset,
   listDatasets,
   listModels,
+  pickDir,
+  pickFile,
   registerModel,
   scanDataset,
   type BaseModel,
@@ -103,6 +105,38 @@ export default function DatasetView() {
     }
   }
 
+  const onPickModelFile = async () => {
+    setBusy(true)
+    try {
+      const path = await pickFile()
+      if (path) {
+        const base = path.split(/[\\/]/).pop()?.replace(/\.safetensors$/i, '') ?? '模型'
+        setModelName(base)
+        setModelPath(path)
+        setStatus(`已选择：${path}`)
+      }
+    } catch (e) {
+      setStatus(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onPickDatasetDir = async () => {
+    setBusy(true)
+    try {
+      const path = await pickDir()
+      if (path) {
+        setNewDir(path)
+        if (!newName) setNewName(path.split(/[\\/]/).pop() ?? '数据集')
+      }
+    } catch (e) {
+      setStatus(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="dataset-view">
       {/* 基底模型注册 */}
@@ -133,6 +167,9 @@ export default function DatasetView() {
             <option value="dit_krea2">Krea 2 (DiT)</option>
           </select>
           <input placeholder="模型路径（safetensors/目录）" value={modelPath} onChange={(e) => setModelPath(e.target.value)} />
+          <button onClick={() => void onPickModelFile()} disabled={busy} className="secondary" title="打开文件管理器选择 .safetensors">
+            选择…
+          </button>
           <button onClick={onRegisterModel} disabled={busy} className="secondary">
             注册
           </button>
@@ -170,6 +207,9 @@ export default function DatasetView() {
         <div className="create-row">
           <input placeholder="数据集名称" value={newName} onChange={(e) => setNewName(e.target.value)} />
           <input placeholder="图片目录（绝对路径）" value={newDir} onChange={(e) => setNewDir(e.target.value)} />
+          <button onClick={() => void onPickDatasetDir()} disabled={busy} className="secondary" title="打开目录选择器">
+            选择…
+          </button>
           <button onClick={onCreate} disabled={busy} className="secondary">
             注册数据集
           </button>

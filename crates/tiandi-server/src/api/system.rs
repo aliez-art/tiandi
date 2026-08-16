@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::{extract::State, response::Json, routing::get, Router};
+use axum::{extract::State, response::Json, routing::{get, post}, Router};
 use serde::{Deserialize, Serialize};
 
 use super::ApiError;
@@ -12,6 +12,46 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/system", get(system_info))
         .route("/api/settings", get(list_settings).put(update_settings))
+        .route("/api/pick-file", post(pick_file))
+        .route("/api/pick-dir", post(pick_dir))
+}
+
+// ---------- 本地文件选择（rfd 原生对话框） ----------
+
+#[derive(Serialize)]
+struct PickResult {
+    path: Option<String>,
+}
+
+/// 弹出系统文件选择框（阻塞调用，放 blocking 池）；取消返回 path=null。
+async fn pick_file() -> Json<PickResult> {
+    let picked = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("选择基底模型")
+            .add_filter("模型文件", &["safetensors"])
+            .pick_file()
+    })
+    .await
+    .ok()
+    .flatten();
+    Json(PickResult {
+        path: picked.map(|p| p.to_string_lossy().into_owned()),
+    })
+}
+
+/// 弹出系统目录选择框（数据集目录）。
+async fn pick_dir() -> Json<PickResult> {
+    let picked = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("选择数据集目录")
+            .pick_folder()
+    })
+    .await
+    .ok()
+    .flatten();
+    Json(PickResult {
+        path: picked.map(|p| p.to_string_lossy().into_owned()),
+    })
 }
 
 // ---------- 系统信息 ----------

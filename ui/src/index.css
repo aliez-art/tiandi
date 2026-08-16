@@ -334,3 +334,14 @@ textarea {
 .form-sec { border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 6px; }
 .form-sec h4 { margin: 0 0 8px; font-size: 13px; color: var(--amber); letter-spacing: 1px; }
 .dialog .field textarea { width: 100%; box-sizing: border-box; resize: vertical; background: var(--bg-elev); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+
+/* 扁平操作条（炼丹页顶部） */
+.firebar-wrap { grid-column: 1 / -1; }
+.firebar { padding: 10px 14px; display: grid; gap: 6px; }
+.firebar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.firebar-model { font-size: 12px; color: var(--celadon); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.firebar-model.dim { color: var(--ink-dim); }
+.firebar-sep { color: var(--line); }
+.firebar-msg { font-size: 12px; color: var(--amber); }
+.firebar select { max-width: 220px; }
+.sidebar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }

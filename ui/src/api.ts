@@ -311,3 +311,19 @@ export async function deleteRun(runId: string): Promise<void> {
     throw new Error(err?.error ?? `delete run ${res.status}`)
   }
 }
+
+/** 弹出系统文件对话框（后端 rfd 原生对话框）；取消返回 null。 */
+export async function pickFile(): Promise<string | null> {
+  const res = await fetch(`${base()}/api/pick-file`, { method: 'POST' })
+  if (!res.ok) throw new Error(`pick file ${res.status}`)
+  const j = (await res.json()) as { path: string | null }
+  return j.path
+}
+
+/** 弹出系统目录对话框；取消返回 null。 */
+export async function pickDir(): Promise<string | null> {
+  const res = await fetch(`${base()}/api/pick-dir`, { method: 'POST' })
+  if (!res.ok) throw new Error(`pick dir ${res.status}`)
+  const j = (await res.json()) as { path: string | null }
+  return j.path
+}

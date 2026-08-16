@@ -345,3 +345,27 @@ textarea {
 .firebar-msg { font-size: 12px; color: var(--amber); }
 .firebar select { max-width: 220px; }
 .sidebar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+
+/* 单页布局（左配置 / 右监控） */
+.single-layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
+.config-col { display: grid; gap: 16px; }
+.watch-col { display: grid; gap: 16px; min-width: 0; }
+.panel.fold { padding: 0; overflow: hidden; }
+.panel.fold summary { cursor: pointer; padding: 12px 14px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 8px; user-select: none; }
+.panel.fold summary::-webkit-details-marker { display: none; }
+.panel.fold summary::before { content: '▸'; color: var(--amber); transition: transform 0.15s; }
+.panel.fold[open] summary::before { transform: rotate(90deg); }
+.fold-body { padding: 12px 14px 14px; border-top: 1px solid var(--line); }
+.fold-body .panel { box-shadow: none; }
+/* 点火卡控件 */
+.firebar select, .firebar input { width: 100%; box-sizing: border-box; }
+.firebar .firebar-model { grid-column: 1 / -1; font-size: 12px; color: var(--celadon); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.firebar .firebar-model.dim { color: var(--ink-dim); }
+.firebar .firebar-sep { display: none; }
+.firebar .firebar-fire { grid-column: 1 / -1; }
+.firebar-msg { grid-column: 1 / -1; font-size: 12px; color: var(--amber); }
+
+/* 折叠卡内表单窄栏适配 */
+.fold-body .create-row { grid-template-columns: 1fr; }
+.fold-body .actions { flex-wrap: wrap; }
+.fold-body .dataset-view { gap: 10px; }

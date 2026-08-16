@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  createSimulatedRun,
   deleteRun,
   discoverBase,
   fetchHealth,
@@ -29,15 +28,14 @@ const STATE_LABEL: Record<string, string> = {
   canceled: '已取消',
 }
 
+/** 单页布局：左列 = 点火/药材/炉房；右列 = 炼丹记录 + 控制台（参考 lora-scripts/kohya 布局）。 */
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [connecting, setConnecting] = useState(true)
   const [system, setSystem] = useState<SystemInfo | null>(null)
-  const [tab, setTab] = useState<'train' | 'dataset' | 'settings'>('train')
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
   const [showRecipes, setShowRecipes] = useState(false)
   const eventSeq = useRef(0)
 
@@ -117,19 +115,6 @@ export default function App() {
     }
   }, [refreshRuns])
 
-  const onFire = async () => {
-    setBusy(true)
-    try {
-      const run = await createSimulatedRun()
-      setSelected(run.id)
-      await refreshRuns()
-    } catch (e) {
-      console.error('create run failed', e)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const selectedRun = runs.find((r) => r.id === selected) ?? null
 
   const onDeleteRun = async (run: Run) => {
@@ -149,31 +134,10 @@ export default function App() {
         <h1>
           天地熔炉 <span className="sub">Tiandi Furnace</span>
         </h1>
-        <nav className="tabs">
-          <button
-            className={`tab ${tab === 'train' ? 'active' : ''}`}
-            onClick={() => setTab('train')}
-          >
-            炼丹
-          </button>
-          <button
-            className={`tab ${tab === 'dataset' ? 'active' : ''}`}
-            onClick={() => setTab('dataset')}
-          >
-            药材
-          </button>
-          <button
-            className={`tab ${tab === 'settings' ? 'active' : ''}`}
-            onClick={() => setTab('settings')}
-          >
-            炉房
-          </button>
-        </nav>
         <div className="status">
           {system?.gpu && (
             <span className="gpu" title={system.gpu.name}>
-              GPU {system.gpu.util_percent}% ·{' '}
-              {(system.gpu.mem_used_mb / 1024).toFixed(1)}/
+              GPU {system.gpu.util_percent}% · {(system.gpu.mem_used_mb / 1024).toFixed(1)}/
               {(system.gpu.mem_total_mb / 1024).toFixed(0)}GB
             </span>
           )}
@@ -182,7 +146,6 @@ export default function App() {
           ) : health ? (
             <span className="ok">
               ● 已点火 v{health.version}
-              {health.demo ? '（演示模式）' : ''}
             </span>
           ) : (
             <span className="err">● 服务未连接</span>
@@ -190,10 +153,11 @@ export default function App() {
         </div>
       </header>
 
-      {tab === 'train' ? (
-        <main className="layout">
-          {/* 扁平操作条：选底模 → 数据集 → 丹方 → 点火 */}
-          <div className="firebar-wrap">
+      <main className="single-layout">
+        {/* 左列：点火 + 药材 + 炉房 */}
+        <aside className="config-col">
+          <section className="panel">
+            <h2>点火</h2>
             <NewRunBar
               onCreated={(runId) => {
                 setSelected(runId)
@@ -201,17 +165,29 @@ export default function App() {
               }}
               onOpenRecipes={() => setShowRecipes(true)}
             />
-          </div>
-          {/* 任务列表（丹房） */}
-          <aside className="sidebar">
-            <div className="panel-title">
-              <h2>炼丹任务</h2>
-              <button onClick={onFire} disabled={busy || connecting} title="创建模拟炼丹任务（演示）">
-                {busy ? '点火中…' : '模拟'}
-              </button>
+          </section>
+
+          <details className="panel fold" open={false}>
+            <summary>药材 · 模型与数据集</summary>
+            <div className="fold-body">
+              <DatasetView />
             </div>
+          </details>
+
+          <details className="panel fold">
+            <summary>炉房 · 镜像源设置</summary>
+            <div className="fold-body">
+              <SettingsView />
+            </div>
+          </details>
+        </aside>
+
+        {/* 右列：炼丹记录 + 控制台 */}
+        <section className="watch-col">
+          <div className="panel">
+            <h2>炼丹记录</h2>
             {runs.length === 0 ? (
-              <p className="hint">还没有任务。点击「点火」开始。</p>
+              <p className="hint">还没有任务。在左侧选齐底模、数据集与丹方后点「点火炼丹」。</p>
             ) : (
               <ul className="runs">
                 {runs.map((r) => (
@@ -222,9 +198,7 @@ export default function App() {
                   >
                     <span className="run-id">{r.id.slice(0, 8)}</span>
                     <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
-                    <span className="run-time">
-                      {new Date(r.created_at).toLocaleTimeString()}
-                    </span>
+                    <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>
                     {r.state === 'done' || r.state === 'failed' || r.state === 'canceled' ? (
                       <button
                         className="run-del"
@@ -241,30 +215,17 @@ export default function App() {
                 ))}
               </ul>
             )}
-          </aside>
+          </div>
 
-          {/* 训练控制台 / 药库 */}
-          <section className="content">
-            {selectedRun ? (
-              <Console key={selectedRun.id} run={selectedRun} events={events} />
-            ) : (
-              <div className="panel">
-                <p className="hint">
-                  选择一个任务查看训练控制台；或点击「点火」创建模拟炼丹任务（完整 IPC 链路演示）。
-                </p>
-              </div>
-            )}
-          </section>
-        </main>
-      ) : tab === 'settings' ? (
-        <main className="layout-single">
-          <SettingsView />
-        </main>
-      ) : (
-        <main className="layout-single">
-          <DatasetView />
-        </main>
-      )}
+          {selectedRun ? (
+            <Console key={selectedRun.id} run={selectedRun} events={events} />
+          ) : (
+            <div className="panel">
+              <p className="hint">从「炼丹记录」选择一个任务查看控制台（进度 / loss 曲线 / 日志 / 产物）。</p>
+            </div>
+          )}
+        </section>
+      </main>
 
       <footer>本地服务 127.0.0.1 · 仅绑定本机</footer>
       {showRecipes && <RecipeManager onClose={() => setShowRecipes(false)} />}

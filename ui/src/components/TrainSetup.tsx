@@ -622,7 +622,7 @@ export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRec
   const selectedModel = models.find((m) => m.id === modelId) ?? null
 
   return (
-    <div className="firebar panel">
+    <div className="firebar">
       <div className="firebar-row">
         <button onClick={() => void onPickModel()} disabled={busy} className="secondary">
           选择底模…
@@ -632,22 +632,23 @@ export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRec
           <option value="dit_anima">Anima</option>
           <option value="dit_krea2">Krea 2</option>
         </select>
-        <span className={`firebar-model ${selectedModel ? '' : 'dim'}`} title={selectedModel?.path ?? ''}>
-          {selectedModel ? selectedModel.name : '未选择底模'}
-        </span>
-        <span className="firebar-sep">│</span>
-        <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-          {datasets.length === 0 ? (
-            <option value="">（先到「药材」页注册数据集）</option>
-          ) : (
-            datasets.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}（{d.image_count} 张）
-              </option>
-            ))
-          )}
-        </select>
-        <select value={recipeId} onChange={(e) => setRecipeId(e.target.value)}>
+      </div>
+      <span className={`firebar-model ${selectedModel ? '' : 'dim'}`} title={selectedModel?.path ?? ''}>
+        {selectedModel ? selectedModel.name : '未选择底模'}
+      </span>
+      <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)} title="训练数据集">
+        {datasets.length === 0 ? (
+          <option value="">（先到「药材」注册数据集）</option>
+        ) : (
+          datasets.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}（{d.image_count} 张）
+            </option>
+          ))
+        )}
+      </select>
+      <div className="firebar-row">
+        <select value={recipeId} onChange={(e) => setRecipeId(e.target.value)} title="丹方">
           {recipes.length === 0 ? (
             <option value="">（暂无丹方，点「丹方」创建）</option>
           ) : (
@@ -658,13 +659,13 @@ export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRec
             ))
           )}
         </select>
-        <button onClick={props.onOpenRecipes} className="secondary">
+        <button onClick={props.onOpenRecipes} className="secondary" title="丹方管理（新建/编辑参数）">
           丹方
         </button>
-        <button onClick={() => void onFire()} disabled={busy} className="primary">
-          {busy ? '处理中…' : '点火炼丹'}
-        </button>
       </div>
+      <button onClick={() => void onFire()} disabled={busy} className="primary firebar-fire">
+        {busy ? '处理中…' : '点火炼丹'}
+      </button>
       {msg && <div className="firebar-msg">{msg}</div>}
     </div>
   )

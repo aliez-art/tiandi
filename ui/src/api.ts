@@ -84,16 +84,6 @@ export async function listRuns(): Promise<Run[]> {
   return res.json()
 }
 
-export async function createSimulatedRun(): Promise<Run> {
-  const res = await fetch(`${base()}/api/runs?simulate=1`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-  })
-  if (!res.ok) throw new Error(`create run ${res.status}`)
-  return res.json()
-}
-
 export function subscribeEvents(onEvent: (line: string) => void): EventSource {
   const es = new EventSource(`${base()}/api/runs/all/events`)
   es.onmessage = (e) => onEvent(e.data as string)
@@ -327,3 +317,4 @@ export async function pickDir(): Promise<string | null> {
   const j = (await res.json()) as { path: string | null }
   return j.path
 }
+

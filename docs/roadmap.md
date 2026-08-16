@@ -38,12 +38,12 @@
 
 **目标**：队列 + 续训 + Anima（sd-scripts 后端）+ Illusion 验证。
 
-- [ ] 任务队列（持久化 SQLite）：排队/串行/失败不阻断/完成通知
-- [ ] 断点续训：resume 状态落盘 + 崩溃恢复扫描 + UI 一键续丹（含内核侧优雅暂停/续训，§5.3 两段式 cancel）
-- [ ] 指标曲线（loss/lr）内置图表（替代 TensorBoard 依赖）；GPU/显存监控（nvml crate）
-- [ ] Anima 支持：丹方族 DitAnima + BackendSdScripts 参数映射扩展（Qwen3 TE、attn 探测、NaN 防护、T-LoRA/LoKr 网络）
-- [ ] Illusion 注册验证（SDXL 族第二个检查点，同一管线）
-- [ ] 镜像源设置（ModelScope/hf-mirror）与系统通知
+- [x] 任务队列（持久化 SQLite）：排队/串行/失败不阻断/完成通知（scheduler 串行泵 2s 轮询自动拉起 Queued）
+- [x] 断点续训：resume 状态落盘 + 崩溃恢复扫描（服务启动 Preparing/Running→Failed 可重试）+ UI 一键续丹（检测 runs/<id>/checkpoints 最新 state 目录）
+- [x] 指标曲线（loss/lr）内置图表（替代 TensorBoard 依赖）；GPU/显存监控（nvidia-smi 解析 + 前端 3s 轮询）
+- [x] Anima 支持：丹方族 DitAnima + BackendSdScripts 参数映射扩展（Qwen3 TE、t5 旧分词器本地化、attn_mode=torch、cache_text_encoder_outputs=false、T-LoRA 走 lora_anima）——**真实 Anima LoRA 训练已打通**（anima-base-v1.0 + qwen_3_06b_base + qwen_image_vae 全离线，run ddb1423c queued→done，产物 63.2MB 入药库）
+- [ ] Illusion 注册验证（SDXL 族第二个检查点，同一管线；待用户提供 Illusion 底模）
+- [x] 镜像源设置（HF_ENDPOINT/PIP_INDEX_URL 注入内核）与系统通知
 
 **退出**：队列连续跑完 ≥3 个任务（含失败恢复）；Anima LoRA 训练成功；Illusion 训练成功。
 

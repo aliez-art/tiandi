@@ -258,11 +258,16 @@ async fn recover_interrupted(state: &AppState) {
     }
 }
 
-/// sd-scripts 的 `train_data_dir` 要求"父目录包含图片子文件夹"（DreamBooth 布局）。
-/// 用户选择的目录若**直接包含图片**（无含图子文件夹），生成训练镜像：
-/// `<runs>/<run_id>/dataset/<N>_data/`（硬链接原图与同名 .txt；跨卷回退复制；
-/// `N` = 文件夹名前缀数字，即训练次数），返回镜像路径供内核使用；
-/// 子文件夹含图或目录不可用时原样返回。
+/// sd-scripts 的 `train_data_dir` 要求"父目录包含图片子文件夹"（DreamBooth 布局），
+/// 且子文件夹名必须带 `N_` 重复前缀（无前缀的子文件夹会被 sd-scripts 直接忽略）。
+///
+/// 用户选择的目录不满足该约定时，统一生成训练镜像：
+/// `<runs>/<run_id>/dataset/<N>_<名>/`（硬链接图片与同名 .txt；跨卷回退复制）：
+/// - **直接含图**的目录 → 镜像子文件夹 `<N>_data`（`N` = 目录名前缀数字，默认 1）
+/// - **含图但无 `N_` 前缀**的子文件夹 → 自动补前缀 `1_<原名>`（如 `tag` → `1_tag`）
+/// - 已有 `N_` 前缀的子文件夹（如 `10_cat`）→ 原样镜像，重复次数不变
+///
+/// 返回镜像根（即 train_data_dir 指向的父目录）；目录不可用或无图时原样返回。
 fn prepare_dataset_dir(
     dataset_dir: &str,
     run_id: &str,
@@ -287,63 +292,95 @@ fn prepare_dataset_dir(
             })
             .unwrap_or(false)
     };
-    // 有含图子文件夹 → 标准 DreamBooth 布局，直接用原目录
-    let has_nested_images = std::fs::read_dir(src)
+    // 本目录是否直接含图；含图子文件夹列表（保序、去重）
+    let entries = std::fs::read_dir(src)
         .map(|it| {
             it.flatten()
-                .any(|e| e.path().is_dir() && dir_contains_images(&e.path()))
+                .filter_map(|e| e.file_type().ok().map(|t| (e.path(), t)))
+                .collect::<Vec<_>>()
         })
-        .unwrap_or(false);
-    if has_nested_images || !dir_contains_images(src) {
-        return dataset_dir.to_string();
+        .unwrap_or_default();
+    let direct_images = dir_contains_images(src);
+    let nested: Vec<std::path::PathBuf> = entries
+        .iter()
+        .filter(|(p, t)| t.is_dir() && dir_contains_images(p))
+        .map(|(p, _)| p.clone())
+        .collect();
+    if !direct_images && nested.is_empty() {
+        return dataset_dir.to_string(); // 无图：交给内核报错，语义清晰
     }
 
-    // 直接含图：生成镜像结构
-    // 注意：sd-scripts 的 train_data_dir 必须是"含图子文件夹的父目录"，
-    // 所以镜像根 = runs/<id>/dataset，图片放其子文件夹 <N>_data/，返回镜像根。
-    // 子文件夹名带 N_ 前缀 = 训练次数（kohya 约定，sd-scripts 原生解析）。
+    // 生成镜像结构（train_data_dir = 镜像根，子文件夹带 N_ 前缀）
     let target_root = runs_dir.join(run_id).join("dataset");
-    let group_name = format!("{repeats}_data");
-    let target = target_root.join(&group_name);
-    if !target.join("01.png").exists() && !target.join("01.jpg").exists() {
-        let _ = std::fs::create_dir_all(&target);
-        let entries = std::fs::read_dir(src)
-            .map(|it| it.flatten().collect::<Vec<_>>())
-            .unwrap_or_default();
-        for entry in entries {
-            let path = entry.path();
-            let name = entry.file_name();
-            if !path.is_file() {
-                continue;
-            }
-            // 图片 + 同名 .txt（caption）一起纳入；其余文件忽略
-            let is_txt_of_image = {
-                let s = name.to_string_lossy();
-                let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("");
-                s.ends_with(".txt")
-                    && std::fs::read_dir(src)
-                        .map(|it| {
-                            it.flatten().any(|e| {
-                                e.path().is_file()
-                                    && e.path().file_stem().and_then(|x| x.to_str()) == Some(stem)
-                                    && is_image(&e.file_name())
-                            })
-                        })
-                        .unwrap_or(false)
-            };
-            if !(is_image(&name) || is_txt_of_image) {
-                continue;
-            }
-            let dst = target.join(&name);
-            if dst.exists() {
-                continue;
-            }
-            if std::fs::hard_link(&path, &dst).is_err() {
-                let _ = std::fs::copy(&path, &dst); // 跨卷回退复制
-            }
-        }
+    if direct_images {
+        let group_name = format!("{repeats}_data");
+        link_image_files(src, &target_root.join(&group_name), &is_image);
+    }
+    for sub in nested {
+        let name = sub.file_name().and_then(|n| n.to_str()).unwrap_or("data");
+        let group_name = normalize_group_name(name);
+        link_image_files(&sub, &target_root.join(&group_name), &is_image);
     }
     target_root.to_string_lossy().into_owned()
+}
+
+/// 把目录内的图片与同名 .txt（caption）硬链接（跨卷回退复制）到目标子文件夹；
+/// 幂等：目标已有同名文件则跳过。
+fn link_image_files(
+    src_dir: &std::path::Path,
+    target_group: &std::path::Path,
+    is_image: &dyn Fn(&std::ffi::OsStr) -> bool,
+) {
+    if target_group.join("01.png").exists() || target_group.join("01.jpg").exists() {
+        return; // 已生成过（幂等）
+    }
+    let _ = std::fs::create_dir_all(target_group);
+    let entries = std::fs::read_dir(src_dir)
+        .map(|it| it.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for entry in entries {
+        let path = entry.path();
+        let name = entry.file_name();
+        if !path.is_file() {
+            continue;
+        }
+        // 图片 + 同名 .txt（caption）一起纳入；其余文件忽略
+        let is_txt_of_image = {
+            let s = name.to_string_lossy();
+            let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("");
+            s.ends_with(".txt")
+                && std::fs::read_dir(src_dir)
+                    .map(|it| {
+                        it.flatten().any(|e| {
+                            e.path().is_file()
+                                && e.path().file_stem().and_then(|x| x.to_str()) == Some(stem)
+                                && is_image(&e.file_name())
+                        })
+                    })
+                    .unwrap_or(false)
+        };
+        if !(is_image(&name) || is_txt_of_image) {
+            continue;
+        }
+        let dst = target_group.join(&name);
+        if dst.exists() {
+            continue;
+        }
+        if std::fs::hard_link(&path, &dst).is_err() {
+            let _ = std::fs::copy(&path, &dst); // 跨卷回退复制
+        }
+    }
+}
+
+/// 子文件夹名规范化：已有 `N_` 前缀（数字开头 + `_`/`-` 分隔）原样保留；
+/// 无前缀时补 `1_`（sd-scripts 忽略无 repeats 前缀的子文件夹）。
+fn normalize_group_name(name: &str) -> String {
+    let first = name.split(['_', '-', ' ']).next().unwrap_or("");
+    if first.parse::<u64>().is_ok() {
+        name.to_string() // 已带 N_ 前缀（或纯数字名，kohya 可解析）
+    } else {
+        format!("1_{name}")
+    }
 }
 
 #[cfg(test)]
@@ -484,17 +521,28 @@ mod tests {
     }
 
     #[test]
-    fn prepare_dataset_dir_keeps_nested_layout() {
+    fn prepare_dataset_dir_prefixes_nested_groups() {
         let tmp = tempfile::tempdir().unwrap();
         let nested = tmp.path().join("ds");
-        let group = nested.join("10_cat");
-        std::fs::create_dir_all(&group).unwrap();
-        std::fs::write(group.join("a.png"), b"png").unwrap();
+        // 无前缀子文件夹（tag）→ 自动补 1_；有前缀（10_cat）→ 原样
+        std::fs::create_dir_all(nested.join("tag")).unwrap();
+        std::fs::create_dir_all(nested.join("10_cat")).unwrap();
+        std::fs::write(nested.join("tag/01.png"), b"png").unwrap();
+        std::fs::write(nested.join("10_cat/a.png"), b"png").unwrap();
         let runs = tmp.path().join("runs");
         let out = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-2", &runs, 1);
-        // 子文件夹含图 → 原目录直接返回，不生成镜像
-        assert_eq!(out, nested.to_str().unwrap());
-        assert!(!runs.join("run-2").exists());
+        let root = std::path::Path::new(&out);
+        assert!(
+            root.join("1_tag/01.png").is_file(),
+            "无前缀子文件夹应补 1_ 前缀"
+        );
+        assert!(
+            root.join("10_cat/a.png").is_file(),
+            "有前缀子文件夹原样镜像"
+        );
+        // 幂等
+        let out2 = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-2", &runs, 1);
+        assert_eq!(out, out2);
     }
 
     #[test]
@@ -515,5 +563,13 @@ mod tests {
         assert_eq!(super::repeats_from_dir("D:\\数据\\tag"), 1);
         assert_eq!(super::repeats_from_dir("D:\\数据\\0_abc"), 1); // 0 → 兜底 1
         assert_eq!(super::repeats_from_dir(""), 1);
+    }
+
+    #[test]
+    fn normalize_group_name_rules() {
+        assert_eq!(super::normalize_group_name("tag"), "1_tag");
+        assert_eq!(super::normalize_group_name("10_cat"), "10_cat");
+        assert_eq!(super::normalize_group_name("2-artstyle"), "2-artstyle");
+        assert_eq!(super::normalize_group_name("我的图"), "1_我的图");
     }
 }

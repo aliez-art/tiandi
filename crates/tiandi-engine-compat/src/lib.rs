@@ -201,37 +201,45 @@ impl SdScriptsTrainer {
                 .map(|s| s.to_string());
             // 本地 tokenizer（离线化：<workspace>/tokenizers/{clip-l,clip-g}）
             let (tokenizer, tokenizer2) = self.local_tokenizers();
-            // Anima 家族：qwen3 TE / VAE 与基底模型同目录探测；T5 分词器用内核自带
-            // （丹方指定 VAE/TE 时优先）
-            let (anima_qwen3, anima_vae, anima_t5_tokenizer) =
-                if job.family == tiandi_core::ModelFamily::DitAnima {
-                    let base_dir = job
-                        .base_model
-                        .as_ref()
-                        .map(std::path::Path::new)
-                        .and_then(|p| p.parent())
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_default();
-                    let qwen3 = base_dir.join("qwen_3_06b_base.safetensors");
-                    let vae = base_dir.join("qwen_image_vae.safetensors");
-                    let t5 = self
-                        .env
-                        .sd_scripts
-                        .as_ref()
-                        .map(|s| s.join("configs/t5_old"))
-                        .filter(|p| p.is_dir());
-                    (
-                        te_override.clone().or_else(|| {
-                            qwen3.exists().then(|| qwen3.to_string_lossy().into_owned())
-                        }),
-                        vae_override
-                            .clone()
-                            .or_else(|| vae.exists().then(|| vae.to_string_lossy().into_owned())),
-                        t5.map(|p| p.to_string_lossy().into_owned()),
-                    )
-                } else {
-                    (None, None, None)
-                };
+            // Anima 家族：qwen3 TE / VAE / T5 分词器在底模同目录探测
+            // （精确名优先，回退通配匹配；丹方指定 VAE/TE 时优先）。
+            // 覆盖：底模与资产同目录（测试底模/anima/）、或资产为常见变体文件名。
+            let (anima_qwen3, anima_vae, anima_t5_tokenizer) = if job.family
+                == tiandi_core::ModelFamily::DitAnima
+            {
+                let base_dir = job
+                    .base_model
+                    .as_ref()
+                    .map(std::path::Path::new)
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_default();
+                let qwen3 = find_safetensors_in(&base_dir, &["qwen_3_06b_base", "qwen_3", "qwen3"]);
+                let vae = find_safetensors_in(&base_dir, &["qwen_image_vae", "image_vae"]);
+                // T5 旧分词器：内核自带 configs/t5_old → 底模同目录 t5_old → 通配 t5 目录
+                let t5 = self
+                    .env
+                    .sd_scripts
+                    .as_ref()
+                    .map(|s| s.join("configs/t5_old"))
+                    .filter(|p| p.is_dir())
+                    .or_else(|| {
+                        let d = base_dir.join("t5_old");
+                        d.is_dir().then_some(d)
+                    })
+                    .or_else(|| find_dir_in(&base_dir, &["t5_old", "t5_", "t5"]));
+                (
+                    te_override
+                        .clone()
+                        .or_else(|| qwen3.map(|p| p.to_string_lossy().into_owned())),
+                    vae_override
+                        .clone()
+                        .or_else(|| vae.map(|p| p.to_string_lossy().into_owned())),
+                    t5.map(|p| p.to_string_lossy().into_owned()),
+                )
+            } else {
+                (None, None, None)
+            };
             let paths = TrainPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
@@ -469,6 +477,40 @@ impl Trainer for SdScriptsTrainer {
         let _ = run_id;
         Ok(None)
     }
+}
+
+/// 在目录中按文件名子串（不区分大小写）找第一个匹配的 .safetensors。
+fn find_safetensors_in(dir: &std::path::Path, needles: &[&str]) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if name.ends_with(".safetensors")
+            && needles.iter().any(|n| name.contains(&n.to_lowercase()))
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// 在目录中按名字子串（不区分大小写）找第一个匹配的子目录。
+fn find_dir_in(dir: &std::path::Path, needles: &[&str]) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if needles.iter().any(|n| name.contains(&n.to_lowercase())) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

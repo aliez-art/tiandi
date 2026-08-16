@@ -191,9 +191,15 @@ pub fn build_sdscripts_toml(
     if let Some(v) = recipe.max_token_length {
         t.push_str(&format!("max_token_length = {v}\n"));
     }
+    // 训练文本编码器：LoRA 默认关闭；开启后与 TE 输出缓存互斥（缓存自动关闭，
+    // sd-scripts 无法在缓存 TE 输出的同时训练 TE）。Anima 家族支持训练 Qwen3 TE，
+    // 且 Anima 默认不缓存 TE 输出（正好配合 TE 训练场景）。
+    let train_te = recipe.train_text_encoder.unwrap_or(false);
+    t.push_str(&format!("train_text_encoder = {train_te}\n"));
     t.push_str(&format!("cache_latents = {}\n", recipe.cache_latents));
-    // Anima 家族：不缓存 TE 输出（需训练 Qwen3 TE）；其余按丹方
-    let cache_te = recipe.cache_text_encoder_outputs && family != ModelFamily::DitAnima;
+    // TE 输出缓存：训练 TE 时强制关闭；Anima 家族不缓存（Qwen3 TE 需训练）
+    let cache_te =
+        recipe.cache_text_encoder_outputs && !train_te && family != ModelFamily::DitAnima;
     t.push_str(&format!("cache_text_encoder_outputs = {cache_te}\n"));
     if recipe.cache_text_encoder_outputs_to_disk && cache_te {
         t.push_str("cache_text_encoder_outputs_to_disk = true\n");
@@ -871,5 +877,37 @@ mod tests {
         };
         let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
         assert!(toml.contains("v_parameterization = false"), "{toml}");
+    }
+
+    #[test]
+    fn train_text_encoder_emitted_and_disables_te_cache() {
+        // 默认（关闭）：train_text_encoder = false，TE 缓存按丹方
+        let default_toml =
+            build_sdscripts_toml(&RecipeData::default(), ModelFamily::Sdxl1, &paths());
+        assert!(
+            default_toml.contains("train_text_encoder = false"),
+            "{default_toml}"
+        );
+        assert!(
+            default_toml.contains("cache_text_encoder_outputs = true"),
+            "{default_toml}"
+        );
+        // 开启：train_text_encoder = true 且 TE 缓存强制关闭
+        let recipe = RecipeData {
+            train_text_encoder: Some(true),
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
+        assert!(toml.contains("train_text_encoder = true"), "{toml}");
+        assert!(
+            toml.contains("cache_text_encoder_outputs = false"),
+            "训练 TE 时缓存必须关闭：{toml}"
+        );
+        // Anima：支持训练 TE（不限制），缓存保持关闭（Qwen3 TE 需训练）
+        let anima_toml = build_sdscripts_toml(&recipe, ModelFamily::DitAnima, &paths());
+        assert!(
+            anima_toml.contains("train_text_encoder = true"),
+            "{anima_toml}"
+        );
     }
 }

@@ -159,6 +159,10 @@ pub struct RecipeData {
     pub batch_size: u32,
     pub resolution: u32,
     pub enable_bucket: bool,
+    // ---- 训练控制 ----
+    /// 是否同时训练文本编码器（TE）。LoRA 训练通常不需要（默认关闭）；
+    /// 开启后与 TE 输出缓存互斥（缓存会被自动关闭）。
+    pub train_text_encoder: Option<bool>,
     // ---- 缓存与精度 ----
     pub cache_latents: bool,
     pub cache_text_encoder_outputs: bool,
@@ -261,6 +265,7 @@ impl Default for RecipeData {
             batch_size: 1,
             resolution: 1024,
             enable_bucket: true,
+            train_text_encoder: None,
             cache_latents: true,
             cache_text_encoder_outputs: true,
             mixed_precision: Precision::Bf16,

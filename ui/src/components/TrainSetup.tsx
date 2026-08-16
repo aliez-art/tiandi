@@ -266,6 +266,12 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     title: '训练控制',
     fields: [
       {
+        key: 'train_text_encoder',
+        label: '训练文本编码器（TE）',
+        hint: 'LoRA 训练通常不需要（保持文本理解冻结即可）。开启会同时微调 TE——质量可能更好但显存/时间增加，且会强制关闭"缓存文本编码器输出"。Anima 的 Qwen3 TE 需要时可开启。',
+        kind: 'bool',
+      },
+      {
         key: 'max_train_epochs',
         label: '训练轮数',
         hint: '每轮 = 全部图片过一遍；小数据集可多轮，首次建议 1 轮试跑。',
@@ -638,7 +644,15 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
     void refresh().catch(() => {})
   }, [])
 
-  const setField = (k: string, v: unknown) => setData((prev) => ({ ...prev, [k]: v }))
+  const setField = (k: string, v: unknown) =>
+    setData((prev) => {
+      const next = { ...prev, [k]: v }
+      // 训练 TE 与 TE 输出缓存互斥：开启 TE 训练时自动关闭缓存（内核无法同时缓存与训练）
+      if (k === 'train_text_encoder' && v === true) {
+        next.cache_text_encoder_outputs = false
+      }
+      return next
+    })
 
   const basename = (p: string) => p.split(/[\\/]/).pop() ?? ''
 

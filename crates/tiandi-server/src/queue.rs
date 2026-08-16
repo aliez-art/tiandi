@@ -258,13 +258,17 @@ fn prepare_dataset_dir(dataset_dir: &str, run_id: &str, runs_dir: &std::path::Pa
     };
     let dir_contains_images = |d: &std::path::Path| -> bool {
         std::fs::read_dir(d)
-            .map(|it| it.flatten().any(|e| e.path().is_file() && is_image(&e.file_name())))
+            .map(|it| {
+                it.flatten()
+                    .any(|e| e.path().is_file() && is_image(&e.file_name()))
+            })
             .unwrap_or(false)
     };
     // 有含图子文件夹 → 标准 DreamBooth 布局，直接用原目录
     let has_nested_images = std::fs::read_dir(src)
         .map(|it| {
-            it.flatten().any(|e| e.path().is_dir() && dir_contains_images(&e.path()))
+            it.flatten()
+                .any(|e| e.path().is_dir() && dir_contains_images(&e.path()))
         })
         .unwrap_or(false);
     if has_nested_images || !dir_contains_images(src) {
@@ -443,11 +447,7 @@ mod tests {
         std::fs::write(flat.join("01.txt"), b"1girl").unwrap();
         std::fs::write(flat.join("notes.md"), b"x").unwrap(); // 非图片忽略
         let runs = tmp.path().join("runs");
-        let out = super::prepare_dataset_dir(
-            flat.to_str().unwrap(),
-            "run-1",
-            &runs,
-        );
+        let out = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-1", &runs);
         // 镜像结构：train_data_dir = runs/run-1/dataset（父目录），
         // 图片在子文件夹 1_data/ 内（sd-scripts DreamBooth 布局）
         assert!(std::path::Path::new(&out).join("1_data/01.png").is_file());
@@ -474,8 +474,11 @@ mod tests {
 
     #[test]
     fn prepare_dataset_dir_missing_dir_passthrough() {
-        let out = super::prepare_dataset_dir("Z:\\不存在的目录", "run-3", &std::path::PathBuf::from("Z:\\x"));
+        let out = super::prepare_dataset_dir(
+            "Z:\\不存在的目录",
+            "run-3",
+            &std::path::PathBuf::from("Z:\\x"),
+        );
         assert_eq!(out, "Z:\\不存在的目录");
     }
 }
-

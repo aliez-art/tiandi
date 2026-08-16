@@ -237,7 +237,11 @@ async fn pick_with_timeout(title: &'static str, file: bool) -> Result<Option<Str
                 dialog_owner::prepare_foreground(*hwnd);
                 dlg = dlg.set_parent(h);
             }
-            let picked = if file { dlg.pick_file() } else { dlg.pick_folder() };
+            let picked = if file {
+                dlg.pick_file()
+            } else {
+                dlg.pick_folder()
+            };
             #[cfg(windows)]
             if let Some((_, hwnd)) = owner {
                 dialog_owner::destroy(hwnd);

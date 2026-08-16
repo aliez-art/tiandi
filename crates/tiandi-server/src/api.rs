@@ -266,7 +266,9 @@ async fn delete_run(
     // 删除任务目录（配置/日志/产物/采样）
     let dir = state.trainer.runs_dir().join(&id);
     if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            warn!("清理任务目录失败（{}）：{e}", dir.display());
+        }
     }
     // 同时清理 output 产物目录（示例图/LoRA，output/<id>）；失败仅 warn 不阻塞
     let out_dir = crate::output_root(state.trainer.runs_dir()).join(&id);

@@ -105,20 +105,6 @@ impl std::fmt::Display for RunState {
     }
 }
 
-/// 非法状态迁移错误。
-#[derive(Debug, thiserror::Error)]
-#[error("非法状态迁移：{from:?} → {to:?}（{from} 不可迁移到 {to}）")]
-pub struct RunStateError {
-    pub from: RunState,
-    pub to: RunState,
-}
-
-impl RunStateError {
-    pub fn new(from: RunState, to: RunState) -> Self {
-        Self { from, to }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

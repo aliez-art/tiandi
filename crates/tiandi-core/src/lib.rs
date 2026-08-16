@@ -9,4 +9,4 @@ pub mod state;
 
 pub use domain::{BaseModel, Checkpoint, Dataset, MetricPoint, ModelFamily, Project, Recipe, Run};
 pub use events::{Event, EventBus};
-pub use state::{RunState, RunStateError};
+pub use state::RunState;

@@ -681,6 +681,18 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     ],
   },
 ]
+
+/** 随 payload 保存但不属于表单字段的特殊键（底模/数据集路径等），不受可见字段过滤影响。 */
+const SPECIAL_PAYLOAD_KEYS = new Set([
+  'model_path',
+  'vae_path',
+  'te_path',
+  'dataset_dir',
+  'full_finetune',
+  'name',
+  'prediction_type',
+])
+
 /** 新建丹方表单的默认值（与后端 RecipeData 对齐）。 */
 function defaultData(): Record<string, unknown> {
   return {
@@ -952,12 +964,34 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
     }
   }
 
+  // 全量模式：过滤 LoRA 专属分区（训练用模型 / 网络设置）
+  const hiddenSections = full ? ['训练用模型', '网络设置'] : []
+  const sections = FORM_SECTIONS.filter((sec) => !hiddenSections.includes(sec.title))
+  // 全量模式：精度与缓存区只显示混合精度
+  const visibleFields = (sec: { title: string; fields: FieldDef[] }) => {
+    if (full && sec.title === '精度与缓存') {
+      return sec.fields.filter((f) => f.key === 'mixed_precision')
+    }
+    return sec.fields
+  }
+
   // ---------- 保存 / 点火 ----------
 
   const buildPayload = () => {
     const payload = { ...data }
     const pt = payload.prediction_type
     if (pt === '' || pt === undefined || pt === null) delete payload.prediction_type
+    // 全量模式：隐藏分区（训练用模型 / 网络设置）与「精度与缓存」中被过滤字段的
+    // 默认值/历史残留不应随 payload 发送——仅保留当前可见字段 + 白名单特殊键
+    if (full) {
+      const visible = new Set<string>()
+      for (const sec of sections) {
+        for (const f of visibleFields(sec)) visible.add(f.key)
+      }
+      for (const k of Object.keys(payload)) {
+        if (!visible.has(k) && !SPECIAL_PAYLOAD_KEYS.has(k)) delete payload[k]
+      }
+    }
     for (const k of Object.keys(payload)) {
       const v = payload[k]
       if (v === null || v === '' || (Array.isArray(v) && v.length === 0)) delete payload[k]
@@ -1065,12 +1099,13 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
     setName(r.name)
     setFamily(r.family)
     const d = r.data as Record<string, unknown>
-    setData({ ...defaultData(), ...d })
-    // 示例图开关与采样间隔同步（旧丹方无 sample_enabled 时按间隔推导）
-    setData((prev) => ({
-      ...prev,
-      sample_enabled: (prev.sample_every_n_epochs as number) > 0,
-    }))
+    // 单次合并默认值 + 丹方数据，并收敛联动规则（与 setField 保持一致）：
+    // - train_text_encoder === true → 强制关闭 cache_text_encoder_outputs（互斥）
+    // - sample_enabled 由 sample_every_n_epochs 推导（旧丹方无 sample_enabled 时兜底）
+    const next = { ...defaultData(), ...d }
+    if (next.train_text_encoder === true) next.cache_text_encoder_outputs = false
+    next.sample_enabled = (next.sample_every_n_epochs as number) > 0
+    setData(next)
     if (typeof d.model_path === 'string') setModelPath(d.model_path)
     if (typeof d.vae_path === 'string') setVaePath(d.vae_path)
     if (typeof d.te_path === 'string') setTePath(d.te_path)
@@ -1093,17 +1128,6 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
   }
 
   const datasetInfo = datasets.find((d) => d.dir === datasetDir)
-
-  // 全量模式：过滤 LoRA 专属分区（训练用模型 / 网络设置）
-  const hiddenSections = full ? ['训练用模型', '网络设置'] : []
-  const sections = FORM_SECTIONS.filter((sec) => !hiddenSections.includes(sec.title))
-  // 全量模式：精度与缓存区只显示混合精度
-  const visibleFields = (sec: { title: string; fields: FieldDef[] }) => {
-    if (full && sec.title === '精度与缓存') {
-      return sec.fields.filter((f) => f.key === 'mixed_precision')
-    }
-    return sec.fields
-  }
 
   return (
     <div className="recipe-page">
@@ -1240,24 +1264,6 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
             </label>
           </div>
         </div>
-
-        {full && (
-          <div className="form-sec">
-            <h4>全量微调（输出完整模型，显存需求高）</h4>
-            <div className="form-grid">
-              <FieldInput
-                field={{
-                  key: 'train_text_encoder',
-                  label: '同时训练文本编码器',
-                  hint: '勾选后 TE 一起微调（需已选文本编码器）；显存占用大幅上升。',
-                  kind: 'bool',
-                }}
-                value={data.train_text_encoder}
-                onChange={(v) => setField('train_text_encoder', v)}
-              />
-            </div>
-          </div>
-        )}
 
         {sections.map((sec) => {
           const isOpen = open.has(sec.title)

@@ -366,7 +366,8 @@ pub fn validate_recipe(family: ModelFamily, data: &RecipeData) -> Vec<RecipeIssu
         issue(
             IssueLevel::Warning,
             "sample_prompts",
-            "启用了周期采样但没有采样提示词，将无图可出".into(),
+            "启用了周期采样但没有采样提示词：将使用触发词（无触发词时用默认提示词）生成预览图"
+                .into(),
         );
     }
 

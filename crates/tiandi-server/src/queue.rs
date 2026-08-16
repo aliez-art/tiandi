@@ -50,6 +50,20 @@ async fn try_pump(state: &AppState) {
         }
     };
 
+    // 取消竞态：claim→build_job 窗口内用户可能已取消（状态被置 Canceled），
+    // 拉起内核前二次检查状态，避免已取消任务白跑整轮（白耗 GPU、产物落盘）。
+    let cancelled = state
+        .store
+        .lock()
+        .await
+        .get_run(&run.id)
+        .map(|r| matches!(r.state, RunState::Canceled))
+        .unwrap_or(false);
+    if cancelled {
+        info!("任务 {} 已在排队期间被取消，跳过启动", &run.id[..8]);
+        return;
+    }
+
     info!(
         "队列调度：拉起任务 {}（{}）",
         &run.id[..8],
@@ -99,7 +113,14 @@ pub async fn build_job(
     // sd-scripts 的 `N_` 约定一致；无前缀默认 1。
     let runs_dir = state.trainer.runs_dir();
     let repeats = repeats_from_dir(&dataset_dir);
-    dataset_dir = prepare_dataset_dir(&dataset_dir, &run.id, runs_dir, repeats);
+    // 数据集镜像 = 同步磁盘 I/O（硬链接/复制），挪到阻塞线程池，避免卡 async worker
+    let (ds_dir, run_id, runs_owned) =
+        (dataset_dir.clone(), run.id.clone(), runs_dir.to_path_buf());
+    dataset_dir = tokio::task::spawn_blocking(move || {
+        prepare_dataset_dir(&ds_dir, &run_id, &runs_owned, repeats)
+    })
+    .await
+    .map_err(|e| format!("数据集镜像生成失败：{e}"))?;
     if let Some(mid) = &base_model_id {
         let store = state.store.lock().await;
         let m = store.get_base_model(mid).map_err(|e| e.to_string())?;
@@ -158,17 +179,23 @@ pub async fn build_job(
     })
 }
 
-/// 训练次数：取文件夹名前缀数字（kohya `N_` 约定，如 `2_artstyle` → 2，
-/// `10_cat` → 10）；无数字前缀默认 1。仅对"直接含图目录"生效——
+/// 训练次数：取文件夹名前缀数字（kohya `N_` 约定，如 `2_artstyle` → 2、
+/// `10_cat` → 10）；无数字前缀默认 1；**纯数字目录名（如 `123`）视为 1**
+/// （kohya 会把纯数字名当 123 次重复，需防误用）。仅对"直接含图目录"生效——
 /// 子文件夹结构下由 sd-scripts 按各子文件夹名自行解析，此处返回 1。
 fn repeats_from_dir(dataset_dir: &str) -> u64 {
-    std::path::Path::new(dataset_dir)
+    let name = std::path::Path::new(dataset_dir)
         .file_name()
         .and_then(|n| n.to_str())
-        .and_then(|n| n.split(['_', '-', ' ']).next())
-        .and_then(|n| n.parse::<u64>().ok())
-        .unwrap_or(1)
-        .max(1)
+        .unwrap_or("");
+    let first = name.split(['_', '-', ' ']).next().unwrap_or("");
+    let n = first.parse::<u64>().ok().unwrap_or(1);
+    // 无分隔符（纯数字名）→ 1（防 kohya 误解析为 N 次重复）
+    if name == first {
+        1
+    } else {
+        n.max(1)
+    }
 }
 
 /// 探测最新 sd-scripts state 目录（`<name>-<step>.state`）。
@@ -323,27 +350,60 @@ fn prepare_dataset_dir(
 
     // 生成镜像结构（train_data_dir = 镜像根，子文件夹带 N_ 前缀）
     let target_root = runs_dir.join(run_id).join("dataset");
+    // 分组名去重：不同来源规范化后同名（如 `tag` 与已有 `1_tag`、直接含图与
+    // 嵌套 `N_data`）时，后者追加 `_2`/`_3` 序号，避免后一组被静默丢弃/混入。
+    // 嵌套目录按名排序后再分配序号，保证重复调用结果一致（幂等）。
+    let mut used: Vec<String> = Vec::new();
+    let mut unique_name = |base: &str| -> String {
+        let mut name = base.to_string();
+        let mut i = 2;
+        while used.contains(&name) {
+            name = format!("{base}_{i}");
+            i += 1;
+        }
+        used.push(name.clone());
+        name
+    };
+    let mut failed: Vec<String> = Vec::new();
     if direct_images {
-        let group_name = format!("{repeats}_data");
-        link_image_files(src, &target_root.join(&group_name), &is_image);
+        let group_name = unique_name(&format!("{repeats}_data"));
+        failed.extend(
+            link_image_files(src, &target_root.join(&group_name), &is_image)
+                .into_iter()
+                .map(|f| format!("{group_name}/{f}")),
+        );
     }
+    let mut nested = nested;
+    nested.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     for sub in nested {
         let name = sub.file_name().and_then(|n| n.to_str()).unwrap_or("data");
-        let group_name = normalize_group_name(name);
-        link_image_files(&sub, &target_root.join(&group_name), &is_image);
+        let group_name = unique_name(&normalize_group_name(name));
+        failed.extend(
+            link_image_files(&sub, &target_root.join(&group_name), &is_image)
+                .into_iter()
+                .map(|f| format!("{group_name}/{f}")),
+        );
+    }
+    if !failed.is_empty() {
+        warn!(
+            "数据集镜像有 {} 个文件链接失败（跨卷复制也失败）：{}",
+            failed.len(),
+            failed.join(", ")
+        );
     }
     target_root.to_string_lossy().into_owned()
 }
 
 /// 把目录内的图片与同名 .txt（caption）硬链接（跨卷回退复制）到目标子文件夹；
-/// 幂等：目标已有同名文件则跳过。
+/// 幂等：目标已有同名文件则跳过。返回失败（硬链接+复制均失败）的相对文件名列表。
 fn link_image_files(
     src_dir: &std::path::Path,
     target_group: &std::path::Path,
     is_image: &dyn Fn(&std::ffi::OsStr) -> bool,
-) {
+) -> Vec<String> {
+    let mut failed = Vec::new();
     if target_group.join("01.png").exists() || target_group.join("01.jpg").exists() {
-        return; // 已生成过（幂等）
+        return failed; // 已生成过（幂等）
     }
     let _ = std::fs::create_dir_all(target_group);
     let entries = std::fs::read_dir(src_dir)
@@ -378,19 +438,49 @@ fn link_image_files(
             continue;
         }
         if std::fs::hard_link(&path, &dst).is_err() {
-            let _ = std::fs::copy(&path, &dst); // 跨卷回退复制
+            // 跨卷回退复制；仍失败则记名上报（此前被 `let _` 吞掉，镜像缺图无感知）
+            if std::fs::copy(&path, &dst).is_err() {
+                failed.push(name.to_string_lossy().into_owned());
+            }
         }
     }
+    failed
 }
 
-/// 子文件夹名规范化：已有 `N_` 前缀（数字开头 + `_`/`-` 分隔）原样保留；
-/// 无前缀时补 `1_`（sd-scripts 忽略无 repeats 前缀的子文件夹）。
+/// 子文件夹名规范化：生成 sd-scripts 能解析的 `N_` 前缀名。
+///
+/// kohya 按 `_` 分割解析（config_util.py `extract_dreambooth_params`）：
+/// - `10_cat`（标准前缀）→ 原样保留，repeats=10
+/// - `2-artstyle`（横杠/空格分隔）→ 规范为 `2_artstyle`（否则 kohya 无法解析被忽略）
+/// - `tag`（无前缀）→ `1_tag`（repeats=1）
+/// - `123`（纯数字）→ `1_123`（否则 kohya 会当 repeats=123）
+/// - `我的图`（无数字）→ `1_我的图`
 fn normalize_group_name(name: &str) -> String {
-    let first = name.split(['_', '-', ' ']).next().unwrap_or("");
-    if first.parse::<u64>().is_ok() {
-        name.to_string() // 已带 N_ 前缀（或纯数字名，kohya 可解析）
+    // 标准 `N_` 前缀（首段为纯数字且有下划线）→ 原样
+    let first_under = name.split('_').next().unwrap_or("");
+    if first_under.parse::<u64>().is_ok() {
+        if name.contains('_') {
+            return name.to_string();
+        }
+        // 纯数字目录名：防 kohya 误解析为 N 次重复
+        return format!("1_{name}");
+    }
+    // 无标准前缀：提取首个数字（支持 `-`/空格分隔），名称保留其余部分
+    let n = name
+        .split(['_', '-', ' '])
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let rest = name
+        .split(['_', '-', ' '])
+        .skip(1)
+        .collect::<Vec<_>>()
+        .join("_");
+    if rest.is_empty() {
+        format!("{n}_{name}")
     } else {
-        format!("1_{name}")
+        format!("{n}_{rest}")
     }
 }
 
@@ -603,6 +693,41 @@ mod tests {
     }
 
     #[test]
+    fn prepare_dataset_dir_dedupes_colliding_group_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        // `tag` 与已有 `1_tag` 规范化后同名：后者应落为 1_tag_2，两组都进镜像
+        let nested = tmp.path().join("ds");
+        std::fs::create_dir_all(nested.join("1_tag")).unwrap();
+        std::fs::create_dir_all(nested.join("tag")).unwrap();
+        std::fs::write(nested.join("1_tag/a.png"), b"png").unwrap();
+        std::fs::write(nested.join("tag/b.png"), b"png").unwrap();
+        let runs = tmp.path().join("runs");
+        let out = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-d", &runs, 1);
+        let root = std::path::Path::new(&out);
+        assert!(root.join("1_tag/a.png").is_file());
+        assert!(
+            root.join("1_tag_2/b.png").is_file(),
+            "同名冲突的后一组应落为 1_tag_2"
+        );
+        // 直接含图 + 嵌套同名组：直接组占 1_data，嵌套组落 1_data_2
+        let flat = tmp.path().join("flat");
+        std::fs::create_dir_all(flat.join("1_data")).unwrap();
+        std::fs::write(flat.join("01.png"), b"png").unwrap();
+        std::fs::write(flat.join("1_data/c.png"), b"png").unwrap();
+        let out2 = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-f", &runs, 1);
+        let root2 = std::path::Path::new(&out2);
+        assert!(root2.join("1_data/01.png").is_file());
+        assert!(
+            root2.join("1_data_2/c.png").is_file(),
+            "嵌套 1_data 与直接组 1_data 冲突应去重"
+        );
+        // 幂等：再次调用结果一致
+        let out3 = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-d", &runs, 1);
+        assert_eq!(out, out3);
+        assert!(root.join("1_tag_2/b.png").is_file());
+    }
+
+    #[test]
     fn prepare_dataset_dir_missing_dir_passthrough() {
         let out = super::prepare_dataset_dir(
             "Z:\\不存在的目录",
@@ -617,8 +742,10 @@ mod tests {
     fn repeats_from_dir_name_prefix() {
         assert_eq!(super::repeats_from_dir("D:\\数据\\2_artstyle"), 2);
         assert_eq!(super::repeats_from_dir("D:\\数据\\10_cat"), 10);
+        assert_eq!(super::repeats_from_dir("D:\\数据\\2-artstyle"), 2);
         assert_eq!(super::repeats_from_dir("D:\\数据\\tag"), 1);
         assert_eq!(super::repeats_from_dir("D:\\数据\\0_abc"), 1); // 0 → 兜底 1
+        assert_eq!(super::repeats_from_dir("D:\\数据\\123"), 1); // 纯数字 → 1（防误解析）
         assert_eq!(super::repeats_from_dir(""), 1);
     }
 
@@ -626,7 +753,11 @@ mod tests {
     fn normalize_group_name_rules() {
         assert_eq!(super::normalize_group_name("tag"), "1_tag");
         assert_eq!(super::normalize_group_name("10_cat"), "10_cat");
-        assert_eq!(super::normalize_group_name("2-artstyle"), "2-artstyle");
+        // 横杠/空格分隔 → 规范为 `_` 分隔（kohya 只认 `_`）
+        assert_eq!(super::normalize_group_name("2-artstyle"), "2_artstyle");
+        assert_eq!(super::normalize_group_name("2 artstyle"), "2_artstyle");
+        // 纯数字目录名 → 加前缀防误解析为 N 次重复
+        assert_eq!(super::normalize_group_name("123"), "1_123");
         assert_eq!(super::normalize_group_name("我的图"), "1_我的图");
     }
 }

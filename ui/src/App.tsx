@@ -12,21 +12,8 @@ import {
   type Run,
   type SystemInfo,
 } from './api'
-import Console, { type EventLine } from './components/Console'
+import Console, { STATE_LABEL, type EventLine } from './components/Console'
 import { RecipeForm } from './components/TrainSetup'
-
-const STATE_LABEL: Record<string, string> = {
-  created: '已创建',
-  queued: '排队中',
-  preparing: '准备中',
-  running: '炼丹中',
-  paused: '文火',
-  sampling: '采样中',
-  saving: '保存中',
-  done: '出炉',
-  failed: '炸炉',
-  canceled: '已取消',
-}
 
 /** 终态任务（可删除）；其余运行中任务禁止删除。 */
 const TERMINAL_STATES = ['done', 'failed', 'canceled']

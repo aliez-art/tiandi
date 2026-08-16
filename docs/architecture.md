@@ -59,7 +59,7 @@ failed →（一键）queued（重试）| running（续训 resume）
 ```
 
 - 状态迁移由 `tiandi-core` 单点驱动（单一事实来源），引擎侧事件（progress/log/sample/error）经事件总线回流。
-- 崩溃恢复：启动时扫描任务目录，`preparing/running` 中带 `resume` 能力的任务进入 `failed(resumable)`，UI 提示一键续丹。
+- 崩溃恢复（已实现）：服务启动时 `recover_interrupted` 扫描，把 `preparing/running`（含 `paused`）的中断任务统一置 `failed`，UI 显示失败原因并支持一键续丹（重试）；无 manifest 落盘，断点续训由「探测 checkpoints 下最新 `*.state` 目录」实现（`detect_resume_dir`）。
 
 ## 5. 引擎协议（IPC/Stdio，ADR-001）
 
@@ -74,7 +74,7 @@ Rust 侧（tiandi-engine-compat）            Python 内核（受管子进程）
    │  ◄────────────────────────────────────  │  hello / heartbeat / progress /
    │  ④ 控制通道：写内核 stdin（JSON Lines）  │  log / sample / done / fail
    │  ────────────────────────────────────►  │  pause / resume / cancel / query
-   │  ⑤ 冗余通道：文件监控（notify）兜底      │  采样图 / checkpoint / state 落盘
+   │  ⑤ 采样监控：kernel_runner.py 轮询采样目录 │  采样图 / checkpoint / state 落盘
    │  ⑥ 事件总线 → SSE 推给 UI（tiandi-core） │
 ```
 
@@ -87,22 +87,24 @@ Rust 侧（tiandi-engine-compat）            Python 内核（受管子进程）
 {"type":"heartbeat","ts":1755000000}
 {"type":"progress","step":120,"epoch":0.4,"loss":0.1823,"lr":1.2e-4,"eta_s":3150}
 {"type":"log","level":"info","msg":"saving checkpoint..."}
-{"type":"sample","path":"runs/xxx/samples/e004-0123.png","prompt":"1girl, ..."}
-{"type":"metric","name":"loss","step":120,"value":0.1823}
-{"type":"done","code":0,"artifacts":["runs/xxx/checkpoints/xxx.safetensors"]}
+{"type":"sample","path":"<workspace>/output/<run>/checkpoints/sample/e004-0123.png"}
+{"type":"done","code":0,"artifacts":["<workspace>/output/<run>/checkpoints/xxx.safetensors"]}
 {"type":"fail","code":1,"tail":"CUDA out of memory. Tried to allocate..."}
 ```
 
-- 内核 stdout 中非 JSON 行（如 torch/accelerate 的杂散输出）按 `log` 事件降级处理；**结构化解析失败不阻塞**，原始日志始终落文件。
+> 与早期设计的差异：`metric`（name/value）已并入 `progress` 的 step/loss/lr 字段；`sample` 事件无 `prompt` 字段（提示词文件由服务端生成，见 §5.4）。
+
+- 内核 stdout 中非 JSON 行（如 torch/accelerate 的杂散输出）直接丢弃（原始输出始终由 kernel_runner.py 落日志文件并透传为 `log` 事件）；**结构化解析失败不阻塞**。
 - 事件缓冲：Rust 侧环形缓冲（参考 lora-scripts-next 1.5 万行方案）供 UI 回放与失败摘要。
+- `heartbeat`（每 2s）：Rust 侧不单独消费，看门狗按「任意内核输出活动」计时（距上次输出超 30s 判定卡死）。
 
 ### 5.3 控制通道（Rust → 内核 stdin）
 
 ```jsonc
-{"cmd":"pause"}     // 进程级挂起（Windows: Job Object + NtSuspendProcess）
-{"cmd":"resume"}    // 恢复执行
+{"cmd":"pause"}     // 进程级挂起（预留命令，当前引擎返回 Unsupported）
+{"cmd":"resume"}    // 恢复执行（预留）
 {"cmd":"cancel"}    // 优雅请求（内核收到后写 state 退出）；超时则强杀
-{"cmd":"query"}     // 请求立即补发 progress/heartbeat（UI 重连恢复）
+{"cmd":"query"}     // 请求立即补发 progress/heartbeat（预留，未实现）
 ```
 
 - `cancel` 两段式：先发命令等 10s，未退则 taskkill /T /F 杀进程树；`pause`/`resume` 为预留命令（当前引擎返回 Unsupported，训练侧暂停列入后续里程碑）。
@@ -111,7 +113,7 @@ Rust 侧（tiandi-engine-compat）            Python 内核（受管子进程）
 
 - **心跳与卡死检测（已实现）**：内核（sd-scripts/ai-toolkit 模式）每 2s 发一条 `heartbeat`；Rust 侧看门狗每 5s 检查，距上次内核输出超过 30s 判定卡死（显存溢出挂起等），自动强制终止并上报失败摘要。
 - **握手**：`hello` 事件在启动时上报（backend/version），后续可按锁定清单扩展比对（当前未强制）。
-- **冗余通道**：采样图/checkpoint/state 由内核直接落盘；真实训练中采样图由内核侧目录监控自动上报 `sample` 事件（mock 与真实模式均已接通）；产物路径越界（`..`/绝对路径逃逸）会被拒绝入库。
+- **冗余通道**：采样图/checkpoint/state 由内核直接落盘；采样图由 kernel_runner.py 轮询采样目录（`output/<id>/checkpoints/sample/`）自动上报 `sample` 事件（mock 与真实模式均已接通）；产物路径越界（`..`/绝对路径逃逸）会被拒绝入库。
 - **失败语义**：非零退出码 + `fail.tail` 摘要（末 2KB 日志）入任务历史并红显于 UI 日志流；日志文件超过 5MB 自动轮转为 `.log.1`。
 - **队列可靠性**：任务原子认领（`BEGIN IMMEDIATE` 事务，杜绝重复拉起）；取消先置 Canceled 再终止内核（取消不会再显示为"炸炉"）；崩溃恢复覆盖 Paused；服务优雅关停时终止全部内核进程。
 
@@ -122,14 +124,14 @@ Rust 侧（tiandi-engine-compat）            Python 内核（受管子进程）
 
 ## 6. 丹方（tiandi-recipe）
 
-- 结构：`[meta]`（name/family/tags/版本）+ `[data]`（参数树），serde 反序列化到类型化结构，模型族校验器逐项检查（未知键、非法取值、族内不适用参数）。
+- 结构：`[meta]`（name/family/tags/版本）+ `[data]`（参数树），serde 反序列化到类型化结构（未知键由 `#[serde(default)]` 静默忽略——UI 自定义键如 `model_path`/`dataset_dir` 依赖此行为），模型族校验器逐项检查（非法取值、族内不适用参数、范围/互斥约束）。
 - 分层：基础（数据集/步数/学习率/网络 dim）→ 进阶（调度器/EMA/缓存/噪声技巧）→ 专家（完整透传 compat 引擎全参数，含 optimizer_args 自由项）。
-- 预设：内置每模型族「入门」预设；用户预设存 `recipes/` 目录，git 友好。
+- 预设：内置每模型族「入门」预设；用户丹方存 SQLite（`recipes` 表，UI「已保存丹方」列表）。
 - 参数映射表：参考 kohya_ss `lora_gui.py` 的控件→TOML 键映射（其 2147–2556 行）与 lora-scripts-next 的 `sanitize/apply_anima_defaults` 逻辑，整理为 Rust 侧一张声明式映射表（crate 内常量 + 测试对照）。
 
 ## 7. 数据管线（tiandi-dataset）
 
-- 导入：递归扫描 → `image` crate 解码（异步 + rayon 并行）→ 感知哈希去重 → 缩略图（AVIF/WebP）→ EXIF 提取 → 桶分配（长宽比分桶，参考 kohya sd-scripts 的 bucket 算法与 ai-toolkit 的 bucket 实现）。
+- 导入：递归扫描 → `image` crate 解码（异步 + rayon 并行）→ 感知哈希去重 → 缩略图（JPEG）→ EXIF 提取 → 桶分配（长宽比分桶，参考 kohya sd-scripts 的 bucket 算法与 ai-toolkit 的 bucket 实现）。
 - 桶可视化：每桶样本数分布图（UI 侧渲染）。
 - 打标：由 **Python 内核**完成（WD14/CL/Florence，ONNX 推理），Rust 侧只负责任务编排与结果入库（进度/结果经 §5 协议回流）；Rust ONNX Runtime 打标列为远期探索。
 - latent 缓存：由 **Python 内核**完成（sd-scripts `cache_latents_to_disk` / `cache_text_encoder_outputs_to_disk`），Rust 侧管理缓存目录的生命周期与复用（同数据集多任务共享，哈希校验）；candle VAE 编码列为远期探索。
@@ -144,13 +146,16 @@ Rust 侧（tiandi-engine-compat）            Python 内核（受管子进程）
 
 ```text
 <workspace>/
-├── models/        # 基底模型（按 family 子目录）
-├── datasets/      # 数据集（图 + 标签 + latent 缓存）
-├── recipes/       # 丹方 TOML
-├── runs/          # 任务目录（manifest.json + logs/ + samples/ + checkpoints/）
-├── vault/         # 药库（LoRA 产物 + 缩略图 + 元数据）
-└── tiandi.db       # SQLite
+├── models/        # 导入的底模/VAE/TE（models/base_model、models/vae、models/clip）
+├── .kernel/       # sd-scripts 内核（venv + 源码 + kernel.json）
+├── .kernel-aitk/  # ai-toolkit 内核（Krea 2）
+├── runs/          # 任务过程数据（dataset 镜像/日志/采样提示词）；runs/<id>/
+├── output/        # 训练产物：output/<id>/checkpoints/（LoRA + *.state + sample/）
+├── vault/         # （预留）药库备份区
+└── tiandi.db       # SQLite（任务/丹方/模型/数据集记录）
 ```
+
+> `datasets/`、`recipes/`、`vault/` 为预留目录，记录实际存 SQLite；采样图在 `output/<id>/checkpoints/sample/`，无独立 samples/ 目录，也无 manifest.json。
 
 ## 10. 与三个参考项目的对应关系（设计来源标注）
 

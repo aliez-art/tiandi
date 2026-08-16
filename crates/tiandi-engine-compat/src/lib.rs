@@ -280,6 +280,7 @@ impl SdScriptsTrainer {
                     .unwrap_or_else(|| job.run_id.clone())
                     .to_string(),
                 logging_dir: logs_dir.to_string_lossy().into_owned(),
+                repeats: job.repeats.max(1),
                 resume: job.resume_dir.clone(),
                 tokenizer,
                 tokenizer2,

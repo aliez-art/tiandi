@@ -37,7 +37,8 @@ interface MetricEvent {
   lr: number | null
 }
 
-const STATE_LABEL: Record<string, string> = {
+/** 任务状态 → 中文标签（App 运行列表与控制台共用）。 */
+export const STATE_LABEL: Record<string, string> = {
   created: '已创建',
   queued: '排队中',
   preparing: '准备中',
@@ -379,10 +380,27 @@ function LossCurve({ points }: { points: MetricEvent[] }) {
     })
     .join(' ')
 
+  // lr 曲线：独立归一化（与 loss 不同量纲），仅作趋势参考
+  const lrs = recent.map((p) => p.lr).filter((v): v is number => v !== null && v > 0)
+  const maxLr = lrs.length ? Math.max(...lrs) : 1
+  const minLr = lrs.length ? Math.min(...lrs) : 0
+  const lrSpan = Math.max(maxLr - minLr, 1e-9)
+  const lrPath = recent
+    .map((p, i) => {
+      if (p.lr === null || p.lr <= 0) return ''
+      const x = PAD + (i / Math.max(recent.length - 1, 1)) * (W - PAD * 2)
+      const y = PAD + (1 - (p.lr - minLr) / lrSpan) * (H - PAD * 2)
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="curve" role="img" aria-label="损失曲线">
       <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="#33364a" strokeDasharray="4 4" />
       {lossPath && <path d={lossPath} fill="none" stroke="#c0392b" strokeWidth="2" />}
+      {lrPath && <path d={lrPath} fill="none" stroke="#2e86c1" strokeWidth="1.5" strokeDasharray="3 3" />}
+      <text x={PAD} y={H - 4} fill="#c0392b" fontSize="11">loss</text>
+      <text x={PAD + 34} y={H - 4} fill="#2e86c1" fontSize="11">lr</text>
     </svg>
   )
 }

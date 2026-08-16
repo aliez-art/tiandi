@@ -8,10 +8,10 @@ description = "丹方：schema 校验、内置预设、TOML 读写"
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tiandi-core = { path = "../tiandi-core" }
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

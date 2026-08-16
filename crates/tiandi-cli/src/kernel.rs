@@ -307,18 +307,31 @@ pub fn cmd_kernel_install_aitk(workspace: &Path, torch_index: &str) {
 /// Krea 2 资产准备：单文件模型 → TE/VAE 本地化目录 + 写 kernel.json krea2 字段。
 pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
     let kernel_json = workspace.join(".kernel/kernel.json");
-    let json_text = std::fs::read_to_string(&kernel_json)
-        .expect("kernel.json 不存在（请先 tiandi kernel install）");
-    let mut json: serde_json::Value =
-        serde_json::from_str(&json_text).expect("kernel.json 解析失败");
+    let json_text = match std::fs::read_to_string(&kernel_json) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("✗ kernel.json 不存在或不可读（{e}），请先运行 tiandi kernel install");
+            std::process::exit(1);
+        }
+    };
+    let mut json: serde_json::Value = match serde_json::from_str(&json_text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("✗ kernel.json 解析失败：{e}（文件损坏？）");
+            std::process::exit(1);
+        }
+    };
     if json.get("ai_toolkit").is_none() {
         eprintln!("✗ kernel.json 无 ai_toolkit 字段（请先 tiandi kernel install-aitk）");
         std::process::exit(1);
     }
-    let aitk_python = json["ai_toolkit"]["python"]
-        .as_str()
-        .expect("ai_toolkit.python 缺失")
-        .to_string();
+    let aitk_python = match json["ai_toolkit"]["python"].as_str() {
+        Some(p) => p.to_string(),
+        None => {
+            eprintln!("✗ ai_toolkit.python 缺失（kernel.json 损坏？）");
+            std::process::exit(1);
+        }
+    };
     let sd_scripts = json
         .get("sd_scripts")
         .and_then(|s| s.as_str())
@@ -361,7 +374,10 @@ pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
         .split(|b| *b == b'\n')
         .rev()
         .find(|l| l.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{'))
-        .expect("未找到 krea2 清单输出");
+        .unwrap_or_else(|| {
+            eprintln!("✗ 未找到 krea2 清单输出（脚本无有效 JSON 输出）");
+            std::process::exit(1);
+        });
     let manifest_text = match std::str::from_utf8(manifest_line) {
         Ok(s) => s.to_string(),
         Err(_) => {
@@ -369,8 +385,13 @@ pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
             String::from_utf8_lossy(manifest_line).into_owned()
         }
     };
-    let krea2: serde_json::Value =
-        serde_json::from_str(&manifest_text).expect("krea2 清单解析失败");
+    let krea2: serde_json::Value = match serde_json::from_str(&manifest_text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("✗ krea2 清单解析失败：{e}");
+            std::process::exit(1);
+        }
+    };
 
     json["ai_toolkit"]["krea2"] = krea2;
     std::fs::write(&kernel_json, serde_json::to_string_pretty(&json).unwrap())

@@ -1,7 +1,6 @@
 //! 丹方参数 schema（M1 核心子集；全参数映射随 compat 引擎扩展）。
 
 use serde::{Deserialize, Serialize};
-use tiandi_core::ModelFamily;
 
 /// 优化器（kohya_ss 25 种中的常用子集；序列化名与 sd-scripts 参数一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -390,16 +389,6 @@ impl Default for RecipeData {
             persistent_data_loader_workers: None,
             vae_batch_size: None,
         }
-    }
-}
-
-impl RecipeData {
-    /// 是否为 SDXL 族适用（block_weights 等字段的族约束在 validate 中检查）。
-    pub fn family_supported(family: ModelFamily) -> bool {
-        matches!(
-            family,
-            ModelFamily::Sdxl1 | ModelFamily::DitAnima | ModelFamily::DitKrea2
-        )
     }
 }
 

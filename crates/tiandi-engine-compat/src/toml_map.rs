@@ -146,7 +146,11 @@ pub fn build_sdscripts_toml(
     if recipe.lr_scheduler != tiandi_recipe::SchedulerKind::Constant {
         t.push_str(&format!(
             "lr_warmup_steps = {}\n",
-            lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
+            lr_warmup_steps(
+                recipe,
+                dataset_image_count(&paths.dataset_dir),
+                paths.repeats
+            )
         ));
     }
     t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
@@ -454,7 +458,11 @@ pub fn build_sdscripts_toml_full(
     if recipe.lr_scheduler != tiandi_recipe::SchedulerKind::Constant {
         t.push_str(&format!(
             "lr_warmup_steps = {}\n",
-            lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
+            lr_warmup_steps(
+                recipe,
+                dataset_image_count(&paths.dataset_dir),
+                paths.repeats
+            )
         ));
     }
     t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
@@ -484,11 +492,15 @@ pub fn build_sdscripts_toml_full(
     if let Some(no) = recipe.noise_offset {
         t.push_str(&format!("noise_offset = {no}\n"));
     }
-    // 全量训练：latent 缓存可用（TE 不训时）
+    // 全量训练：latent 缓存可用（TE 不训时）；训练 TE 时显式关掉 TE 输出缓存
+    // （与 LoRA 版联动一致，避免"以为在缓存实则没缓存"的隐性差异）
     t.push_str(&format!(
         "cache_latents = {}\n",
         recipe.cache_latents && !train_te
     ));
+    if train_te {
+        t.push_str("cache_text_encoder_outputs = false\n");
+    }
     t.push_str(&format!(
         "save_every_n_epochs = {}\n",
         recipe.save_every_n_epochs
@@ -591,6 +603,9 @@ pub struct TrainPaths {
     pub output_dir: String,
     pub output_name: String,
     pub logging_dir: String,
+    /// 每张图训练次数（数据集目录名前缀数字，如 `2_artstyle` → 2；
+    /// 用于步数/预热估算，与镜像目录一致）
+    pub repeats: u64,
     /// 断点续训（sd-scripts state 目录，可选）
     pub resume: Option<String>,
     /// 本地 CLIP-L tokenizer 目录（可选；离线化，避免运行时下载）
@@ -612,13 +627,15 @@ pub struct TrainPaths {
 /// 预热步数：按总步数比例换算。
 ///
 /// `dataset_images`：数据集图片数（Some(图片数) 时按真实规模估算总步数：
-/// `图片数 × epochs × num_repeats / batch_size`；None = 拿不到规模信息，
+/// `图片数 × epochs × repeats / batch_size`；None = 拿不到规模信息，
 /// 保留旧兜底估算 epochs × 1000 步/轮基准）。
-pub fn lr_warmup_steps(recipe: &RecipeData, dataset_images: Option<u64>) -> u64 {
+/// `repeats`：每张图训练次数（来自数据集目录名前缀数字，经 TrainPaths 传入；
+/// 丹方里的 num_repeats 已从 UI 移除、恒 None，不能再用它估算）。
+pub fn lr_warmup_steps(recipe: &RecipeData, dataset_images: Option<u64>, repeats: u64) -> u64 {
     let est_total = match dataset_images {
         Some(images) => {
             let images = images.max(1) as f64;
-            let repeats = recipe.num_repeats.unwrap_or(1).max(1) as f64;
+            let repeats = repeats.max(1) as f64;
             let batch = recipe.batch_size.max(1) as f64;
             // 每轮步数 = 图片数 × 重复次数 / batch_size
             let per_epoch = images * repeats / batch;
@@ -655,7 +672,8 @@ fn dataset_image_count(dataset_dir: &str) -> Option<u64> {
     (count > 0).then_some(count)
 }
 
-/// TOML 基本字符串：双引号包裹，转义 `\` 与 `"`。
+/// TOML 基本字符串：双引号包裹，转义 `\`、`"` 与控制字符（换行/制表符/其他
+/// 控制字符 → `\n`/`\t`/`\uXXXX`）——否则会生成非法 TOML，内核配置解析直接失败。
 fn toml_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -663,6 +681,12 @@ fn toml_quote(s: &str) -> String {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
             c => out.push(c),
         }
     }
@@ -831,6 +855,7 @@ mod tests {
             output_dir: r"D:\runs\r1".into(),
             output_name: "noobai-lora".into(),
             logging_dir: r"D:\runs\r1\logs".into(),
+            repeats: 1,
             resume: None,
             tokenizer: None,
             tokenizer2: None,
@@ -899,7 +924,7 @@ mod tests {
             ..RecipeData::default()
         };
         // 拿不到数据集规模 → 旧兜底估算（epochs × 1000）
-        assert_eq!(lr_warmup_steps(&recipe, None), 1000);
+        assert_eq!(lr_warmup_steps(&recipe, None, 1), 1000);
     }
 
     #[test]
@@ -907,12 +932,12 @@ mod tests {
         let recipe = RecipeData {
             lr_warmup_ratio: 0.1,
             max_train_epochs: 10,
-            num_repeats: Some(2),
             batch_size: 4,
             ..RecipeData::default()
         };
         // 总步数 = 100 图 × 10 轮 × 2 重复 / 4 batch = 500；预热 10% = 50
-        assert_eq!(lr_warmup_steps(&recipe, Some(100)), 50);
+        // repeats 走显式参数（来自数据集目录名前缀数字，丹方 num_repeats 已废弃）
+        assert_eq!(lr_warmup_steps(&recipe, Some(100), 2), 50);
         // batch_size 兜底 ≥ 1（0 时按 1 算，避免除零）
         let zero_batch = RecipeData {
             lr_warmup_ratio: 0.1,
@@ -920,7 +945,7 @@ mod tests {
             batch_size: 0,
             ..RecipeData::default()
         };
-        assert_eq!(lr_warmup_steps(&zero_batch, Some(100)), 10);
+        assert_eq!(lr_warmup_steps(&zero_batch, Some(100), 1), 10);
     }
 
     #[test]

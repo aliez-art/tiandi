@@ -121,8 +121,15 @@ fn import_one(target_dir: &std::path::Path, src: &std::path::Path) -> Result<Str
         p.is_file()
             && std::fs::metadata(p)
                 .and_then(|m1| {
-                    std::fs::metadata(src)
-                        .map(|m2| m1.len() == m2.len() && m1.modified().ok() == m2.modified().ok())
+                    std::fs::metadata(src).map(|m2| {
+                        m1.len() == m2.len()
+                            && match (m1.modified(), m2.modified()) {
+                                // 两侧 mtime 都拿得到才比较（否则 None==None 会退化成
+                                // 仅按尺寸判定，误判不同文件为同一文件）
+                                (Ok(a), Ok(b)) => a == b,
+                                _ => false,
+                            }
+                    })
                 })
                 .unwrap_or(false)
     };
@@ -132,16 +139,23 @@ fn import_one(target_dir: &std::path::Path, src: &std::path::Path) -> Result<Str
         if same_as_src(&target) {
             return Ok(target.to_string_lossy().into_owned());
         }
+        let mut found: Option<std::path::PathBuf> = None;
         for n in 1..1000 {
             let cand = target_dir.join(format!("{stem}_{n}.{ext}"));
             if !cand.exists() {
-                target = cand;
+                found = Some(cand);
                 break;
             }
             if same_as_src(&cand) {
                 return Ok(cand.to_string_lossy().into_owned());
             }
         }
+        target = found.ok_or_else(|| {
+            ApiError::Conflict(format!(
+                "同名文件 {file_name} 及其 999 个序号副本均已存在且都不是本次导入的文件，\
+                 无法继续累加序号。请清理目标目录中的旧副本后再试"
+            ))
+        })?;
     }
     let ok = std::fs::hard_link(src, &target).is_ok();
     if !ok {
@@ -299,37 +313,63 @@ async fn pick_dir() -> Result<Json<PickResult>, ApiError> {
 /// rfd 原生对话框统一入口：Windows 下带隐藏 owner 窗口 + 前台激活；
 /// 5 分钟超时兜底（对话框异常挂起时不让 HTTP 请求永久阻塞）。
 async fn pick_with_timeout(title: &'static str, file: bool) -> Result<Option<String>, ApiError> {
-    let picked = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        tokio::task::spawn_blocking(move || {
-            #[cfg(windows)]
-            let owner = dialog_owner::create();
-            let mut dlg = rfd::FileDialog::new().set_title(title);
-            if file {
-                dlg = dlg.add_filter("模型文件", &["safetensors"]);
+    // owner 窗口就绪通道：超时兜底时向窗口投递 WM_CLOSE 主动关掉对话框，
+    // 让阻塞线程尽快退出（此前超时只放弃 await，线程与隐藏窗口会无限滞留）。
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<isize>();
+    let handle = tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        let owner = dialog_owner::create();
+        #[cfg(windows)]
+        if let Some((_, hwnd)) = &owner {
+            let _ = ready_tx.send(*hwnd as isize);
+        } else {
+            drop(ready_tx);
+        }
+        #[cfg(not(windows))]
+        drop(ready_tx);
+        let mut dlg = rfd::FileDialog::new().set_title(title);
+        if file {
+            dlg = dlg.add_filter("模型文件", &["safetensors"]);
+        }
+        #[cfg(windows)]
+        if let Some((h, hwnd)) = &owner {
+            dialog_owner::prepare_foreground(*hwnd);
+            dlg = dlg.set_parent(h);
+        }
+        let picked = if file {
+            dlg.pick_file()
+        } else {
+            dlg.pick_folder()
+        };
+        #[cfg(windows)]
+        if let Some((_, hwnd)) = owner {
+            dialog_owner::destroy(hwnd);
+        }
+        picked
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(300), handle).await {
+        Ok(inner) => {
+            let picked = inner.ok().flatten();
+            Ok(picked.map(|p| p.to_string_lossy().into_owned()))
+        }
+        Err(_) => {
+            // 超时：向 owner 投递 WM_CLOSE 关闭对话框（若线程仍在等待用户操作）
+            if let Ok(hwnd) = ready_rx.await {
+                #[cfg(windows)]
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(
+                        hwnd as windows_sys::Win32::Foundation::HWND,
+                        windows_sys::Win32::UI::WindowsAndMessaging::WM_CLOSE,
+                        0,
+                        0,
+                    );
+                }
             }
-            #[cfg(windows)]
-            if let Some((h, hwnd)) = &owner {
-                dialog_owner::prepare_foreground(*hwnd);
-                dlg = dlg.set_parent(h);
-            }
-            let picked = if file {
-                dlg.pick_file()
-            } else {
-                dlg.pick_folder()
-            };
-            #[cfg(windows)]
-            if let Some((_, hwnd)) = owner {
-                dialog_owner::destroy(hwnd);
-            }
-            picked
-        }),
-    )
-    .await
-    .map_err(|_| ApiError::Internal("文件选择超时（对话框 5 分钟无响应）".into()))?
-    .ok()
-    .flatten();
-    Ok(picked.map(|p| p.to_string_lossy().into_owned()))
+            Err(ApiError::Internal(
+                "文件选择超时（对话框 5 分钟无响应，已尝试自动关闭）".into(),
+            ))
+        }
+    }
 }
 
 // ---------- 系统信息 ----------

@@ -42,17 +42,6 @@ body {
 .status .connecting { color: var(--amber); }
 .status .retrying { color: var(--amber); }
 
-.layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
-.layout-single { display: block; }
-
-/* ---- Tab 导航 ---- */
-
-.tabs { display: flex; gap: 4px; background: var(--bg-panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
-.tab { background: transparent; border: none; color: var(--ink-dim); padding: 5px 18px; border-radius: 6px; }
-.tab.active { background: var(--bg-elev); color: var(--amber); }
-
-.sidebar { position: sticky; top: 16px; }
-
 .panel {
   background: var(--bg-panel);
   border: 1px solid var(--line);
@@ -230,68 +219,8 @@ footer {
   text-align: center;
 }
 
-/* ---- 药材视图（数据集 / 标签编辑器） ---- */
-
-.dataset-view { display: grid; gap: 16px; }
-.dataset-view .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.dataset-view .status-line { color: var(--amber); font-size: 12px; margin: 8px 0 0; }
-.dataset-view .create-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-top: 12px; }
-.dataset-view input {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 13px;
-  min-width: 0;
-}
-.dataset-view .datasets .run { cursor: pointer; }
-.dataset-view .datasets .run-time { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-
-.img-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
-  max-height: 420px;
-  overflow-y: auto;
-}
-
-.img-cell {
-  position: relative;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 2px solid transparent;
-  cursor: pointer;
-  background: var(--bg-elev);
-}
-.img-cell img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
-.img-cell.active { border-color: var(--amber); }
-.img-cell.untagged { filter: brightness(0.75); }
-.img-cell .badge {
-  position: absolute;
-  bottom: 4px;
-  left: 4px;
-  background: var(--cinnabar);
-  color: #fff;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 4px;
-}
-
-.editor-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-
-.tagcloud { display: flex; flex-wrap: wrap; gap: 6px 10px; max-height: 220px; overflow-y: auto; align-content: flex-start; }
-.tag { color: var(--amber); cursor: pointer; line-height: 1.4; }
-.tag em { color: var(--ink-dim); font-style: normal; font-size: 10px; margin-left: 2px; }
-.tag:hover { text-decoration: underline; }
-
-.batch-row { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
-.batch-row .chk { color: var(--ink-dim); font-size: 12px; display: flex; align-items: center; gap: 4px; }
-
 .dim { color: var(--ink-dim); font-size: 11px; word-break: break-all; margin-bottom: 8px; }
+
 textarea {
   width: 100%;
   background: var(--bg);
@@ -304,15 +233,6 @@ textarea {
   resize: vertical;
 }
 
-/* ---------- 新建炼丹 / 丹方管理 弹窗 ---------- */
-.overlay { position: fixed; inset: 0; background: rgba(10, 10, 16, 0.6); z-index: 40; cursor: pointer; }
-.dialog-wrap { position: fixed; inset: 0; display: flex; align-items: flex-start; justify-content: center; z-index: 50; padding: 40px 16px; overflow-y: auto; pointer-events: none; }
-.dialog { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 12px; width: 560px; max-width: 100%; padding: 18px 20px; box-shadow: 0 12px 48px rgba(0,0,0,0.5); pointer-events: auto; }
-.dialog.wide { width: 760px; }
-.dialog-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.dialog-title h2 { margin: 0; font-size: 17px; }
-.dialog-title .close { background: transparent; border: none; color: var(--ink-dim); font-size: 14px; cursor: pointer; }
-.dialog-body { display: grid; gap: 14px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .field { display: grid; gap: 4px; font-size: 12px; color: var(--ink-dim); }
 .field.wide { grid-column: 1 / -1; }
@@ -328,14 +248,6 @@ textarea {
 }
 .field-help:hover { background: var(--amber); color: #1c1e26; }
 .field input[type="number"], .field input[type="text"], .field input:not([type]), .field select { width: 100%; box-sizing: border-box; }
-.sidebar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-.adv-toggle { background: transparent; border: none; color: var(--amber); font-size: 12px; cursor: pointer; padding: 6px 0; }
-.recipe-sec { display: grid; gap: 8px; }
-.recipe-sec h3 { margin: 8px 0 0; font-size: 14px; }
-.preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.preset-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 6px; background: var(--bg-elev); }
-.preset-name { font-weight: 600; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
-.family-pill { font-size: 11px; color: var(--celadon); border: 1px solid var(--celadon); border-radius: 99px; padding: 1px 8px; white-space: nowrap; }
 .status-line { color: var(--amber); font-size: 12px; }
 .status-line.error { color: #ff8a80; }
 
@@ -349,7 +261,6 @@ textarea {
 /* 分区表单 */
 .form-sec { border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 6px; }
 .form-sec h4 { margin: 0 0 8px; font-size: 13px; color: var(--amber); letter-spacing: 1px; }
-.dialog .field textarea { width: 100%; box-sizing: border-box; resize: vertical; background: var(--bg-elev); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
 
 /* 折叠卡片分区（lora-scripts-next 风格：标题行按钮 + 可折叠内容区） */
 .form-sec-card {
@@ -378,42 +289,6 @@ textarea {
 .form-sec-title:hover { background: rgba(212, 162, 78, 0.08); filter: none; }
 .form-sec-caret { color: var(--amber); font-size: 12px; flex-shrink: 0; }
 .form-sec-body { padding: 12px 14px 14px; border-top: 1px solid var(--line); }
-
-/* 扁平操作条（炼丹页顶部） */
-.firebar-wrap { grid-column: 1 / -1; }
-.firebar { padding: 10px 14px; display: grid; gap: 6px; }
-.firebar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.firebar-model { font-size: 12px; color: var(--celadon); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.firebar-model.dim { color: var(--ink-dim); }
-.firebar-sep { color: var(--line); }
-.firebar-msg { font-size: 12px; color: var(--amber); }
-.firebar select { max-width: 220px; }
-.sidebar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-
-/* 单页布局（左配置 / 右监控） */
-.single-layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
-.config-col { display: grid; gap: 16px; }
-.watch-col { display: grid; gap: 16px; min-width: 0; }
-.panel.fold { padding: 0; overflow: hidden; }
-.panel.fold summary { cursor: pointer; padding: 12px 14px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 8px; user-select: none; }
-.panel.fold summary::-webkit-details-marker { display: none; }
-.panel.fold summary::before { content: '▸'; color: var(--amber); transition: transform 0.15s; }
-.panel.fold[open] summary::before { transform: rotate(90deg); }
-.fold-body { padding: 12px 14px 14px; border-top: 1px solid var(--line); }
-.fold-body .panel { box-shadow: none; }
-/* 点火卡控件 */
-.firebar select, .firebar input { width: 100%; box-sizing: border-box; }
-.firebar .firebar-model { grid-column: 1 / -1; font-size: 12px; color: var(--celadon); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.firebar .firebar-model.dim { color: var(--ink-dim); }
-.firebar .firebar-sep { display: none; }
-.firebar .firebar-fire { grid-column: 1 / -1; }
-.firebar-msg { grid-column: 1 / -1; font-size: 12px; color: var(--amber); }
-
-/* 折叠卡内表单窄栏适配 */
-.fold-body .create-row { grid-template-columns: 1fr; }
-.fold-body .actions { flex-wrap: wrap; }
-.fold-body .dataset-view { gap: 10px; }
-
 
 /* ---------- 侧边栏布局（丹方 / 炼丹记录） ---------- */
 .side-layout { display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: start; }

@@ -11,7 +11,7 @@ import {
   type SystemInfo,
 } from './api'
 import Console, { type EventLine } from './components/Console'
-import { NewRunBar, RecipeManager } from './components/TrainSetup'
+import { RecipeForm } from './components/TrainSetup'
 
 const STATE_LABEL: Record<string, string> = {
   created: '已创建',
@@ -26,15 +26,15 @@ const STATE_LABEL: Record<string, string> = {
   canceled: '已取消',
 }
 
-/** 单页布局：左列 = 点火/药材/炉房；右列 = 炼丹记录 + 控制台（参考 lora-scripts/kohya 布局）。 */
+/** 布局：左侧边栏（丹方 / 炼丹记录），右侧主区。 */
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [connecting, setConnecting] = useState(true)
   const [system, setSystem] = useState<SystemInfo | null>(null)
+  const [view, setView] = useState<'recipe' | 'runs'>('recipe')
   const [runs, setRuns] = useState<Run[]>([])
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
-  const [showRecipes, setShowRecipes] = useState(false)
   const eventSeq = useRef(0)
 
   // GPU 监控（3s 轮询）
@@ -158,86 +158,87 @@ export default function App() {
           {connecting ? (
             <span className="connecting">◌ 正在点火…</span>
           ) : health ? (
-            <span className="ok">
-              ● 已点火 v{health.version}
-            </span>
+            <span className="ok">● 已点火 v{health.version}</span>
           ) : (
             <span className="err">● 服务未连接</span>
           )}
         </div>
       </header>
 
-      <main className="single-layout">
-        {/* 左列：点火（底模/数据集/丹方/点火） */}
-        <aside className="config-col">
-          <section className="panel">
-            <h2>点火</h2>
-            <NewRunBar
-              onCreated={(runId) => {
-                setSelected(runId)
-                void refreshRuns()
-              }}
-              onOpenRecipes={() => setShowRecipes(true)}
-            />
-          </section>
+      <main className="side-layout">
+        {/* 左侧边栏 */}
+        <aside className="side-nav">
+          <button className={`side-item ${view === 'recipe' ? 'active' : ''}`} onClick={() => setView('recipe')}>
+            丹方
+          </button>
+          <button className={`side-item ${view === 'runs' ? 'active' : ''}`} onClick={() => setView('runs')}>
+            炼丹记录
+          </button>
         </aside>
 
-        {/* 右列：炼丹记录 + 控制台 */}
-        <section className="watch-col">
-          <div className="panel">
-            <div className="panel-title">
-              <h2>炼丹记录</h2>
-              {runs.some((r) => r.state === 'done' || r.state === 'failed' || r.state === 'canceled') && (
-                <button
-                  className="secondary"
-                  onClick={() => void onClearFinished()}
-                  title="删除所有已结束（出炉/炸炉/已取消）的任务"
-                >
-                  清空已结束
-                </button>
-              )}
-            </div>
-            {runs.length === 0 ? (
-              <p className="hint">还没有任务。在左侧选齐底模、数据集与丹方后点「点火炼丹」。</p>
-            ) : (
-              <ul className="runs">
-                {runs.map((r) => (
-                  <li
-                    key={r.id}
-                    className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
-                    onClick={() => setSelected(r.id)}
-                  >
-                    <span className="run-id">{r.id.slice(0, 8)}</span>
-                    <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
-                    <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>
-                    <button
-                      className="run-del"
-                      title="删除任务（含日志/产物/采样）"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void onDeleteRun(r)
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {selectedRun ? (
-            <Console key={selectedRun.id} run={selectedRun} events={events} />
+        {/* 右侧主区 */}
+        <section className="side-main">
+          {view === 'recipe' ? (
+            <RecipeForm
+              onCreated={(runId) => {
+                setSelected(runId)
+                setView('runs')
+                void refreshRuns()
+              }}
+            />
           ) : (
-            <div className="panel">
-              <p className="hint">从「炼丹记录」选择一个任务查看控制台（进度 / loss 曲线 / 日志 / 产物）。</p>
-            </div>
+            <>
+              <div className="panel">
+                <div className="panel-title">
+                  <h2>炼丹记录</h2>
+                  {runs.some((r) => r.state === 'done' || r.state === 'failed' || r.state === 'canceled') && (
+                    <button className="secondary" onClick={() => void onClearFinished()} title="删除所有已结束的任务">
+                      清空已结束
+                    </button>
+                  )}
+                </div>
+                {runs.length === 0 ? (
+                  <p className="hint">还没有任务。到「丹方」页配置好并点「点火炼丹」。</p>
+                ) : (
+                  <ul className="runs">
+                    {runs.map((r) => (
+                      <li
+                        key={r.id}
+                        className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
+                        onClick={() => setSelected(r.id)}
+                      >
+                        <span className="run-id">{r.id.slice(0, 8)}</span>
+                        <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
+                        <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>
+                        <button
+                          className="run-del"
+                          title="删除任务（含日志/产物/采样）"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void onDeleteRun(r)
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {selectedRun ? (
+                <Console key={selectedRun.id} run={selectedRun} events={events} />
+              ) : (
+                <div className="panel">
+                  <p className="hint">从上方记录选择一个任务查看控制台（进度 / loss 曲线 / 日志 / 产物）。</p>
+                </div>
+              )}
+            </>
           )}
         </section>
       </main>
 
       <footer>本地服务 127.0.0.1 · 仅绑定本机</footer>
-      {showRecipes && <RecipeManager onClose={() => setShowRecipes(false)} />}
     </div>
   )
 }

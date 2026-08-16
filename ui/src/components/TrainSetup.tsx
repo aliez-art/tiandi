@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import {
   createDataset,
   createRecipe,
   createRun,
-  deleteDataset,
   deleteRecipe,
   listDatasets,
   listModels,
@@ -12,7 +10,6 @@ import {
   pickDir,
   pickFile,
   registerModel,
-  scanDataset,
   startRun,
   type BaseModel,
   type Dataset,
@@ -330,36 +327,6 @@ function defaultData(): Record<string, unknown> {
   }
 }
 
-/** 遮罩 + 居中弹窗骨架（portal 到 body；遮罩点击 / ✕ / Esc 均可关闭）。 */
-function Dialog(props: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') props.onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [props])
-
-  return createPortal(
-    <>
-      {/* 遮罩与弹窗同级（遮罩 z-index 低于弹窗容器，点击遮罩关闭） */}
-      <div className="overlay" onClick={props.onClose} />
-      <div className="dialog-wrap">
-        <div className={`dialog ${props.wide ? 'wide' : ''}`} onClick={(e) => e.stopPropagation()}>
-          <div className="dialog-title">
-            <h2>{props.title}</h2>
-            <button className="close" onClick={props.onClose} title="关闭（Esc）">
-              ✕
-            </button>
-          </div>
-          <div className="dialog-body">{props.children}</div>
-        </div>
-      </div>
-    </>,
-    document.body,
-  )
-}
-
 /** 单个参数控件。 */
 function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
   const { field, value, onChange } = props
@@ -425,19 +392,25 @@ function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unkn
   }
 }
 
-/** 丹方管理：我的丹方列表 + 完整参数新建表单。 */
-export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeView) => void }) {
+/** 丹方页（主页默认）：底模/数据集选择 + 完整参数表单 + 保存/点火。 */
+export function RecipeForm(props: { onCreated: (runId: string) => void }) {
   const [recipes, setRecipes] = useState<RecipeView[]>([])
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
-  // 新建表单
+  const [models, setModels] = useState<BaseModel[]>([])
+  const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [recipeId, setRecipeId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [family, setFamily] = useState('sdxl1')
+  const [modelPath, setModelPath] = useState('')
+  const [datasetDir, setDatasetDir] = useState('')
   const [data, setData] = useState<Record<string, unknown>>(defaultData())
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
 
   const refresh = async () => {
-    const r = await listRecipes()
+    const [r, m, d] = await Promise.all([listRecipes(), listModels(), listDatasets()])
     setRecipes(r)
+    setModels(m)
+    setDatasets(d)
   }
 
   useEffect(() => {
@@ -446,93 +419,245 @@ export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeV
 
   const setField = (k: string, v: unknown) => setData((prev) => ({ ...prev, [k]: v }))
 
-  const onCreate = async () => {
-    if (!name.trim()) {
-      setMsg('请填写丹方名称')
-      return
-    }
+  const basename = (p: string) => p.split(/[\\/]/).pop() ?? ''
+
+  // ---------- 底模 / 数据集选择 ----------
+
+  const onPickModel = async () => {
     setBusy(true)
     setMsg(null)
     try {
-      const payload = { ...data }
-      // 空值清理：null/空串/空数组不提交（用后端默认）
-      const pt = payload.prediction_type
-      if (pt === '' || pt === undefined || pt === null) delete payload.prediction_type
-      for (const k of Object.keys(payload)) {
-        const v = payload[k]
-        if (v === null || v === '' || (Array.isArray(v) && v.length === 0)) delete payload[k]
+      const path = await pickFile()
+      if (path) {
+        setModelPath(path)
+        setMsg(`已选底模：${path}`)
       }
-      await createRecipe(name.trim(), family, payload)
-      setName('')
-      setMsg(`丹方「${name.trim()}」已保存`)
-      await refresh()
     } catch (e) {
-      setMsg(`创建失败：${e instanceof Error ? e.message : String(e)}`)
+      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setBusy(false)
     }
   }
 
-  const onDelete = async (r: RecipeView) => {
+  const onPickDataset = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const dir = await pickDir()
+      if (dir) {
+        setDatasetDir(dir)
+        setMsg(`已选数据集：${dir}`)
+      }
+    } catch (e) {
+      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ---------- 保存 / 点火 ----------
+
+  const buildPayload = () => {
+    const payload = { ...data }
+    const pt = payload.prediction_type
+    if (pt === '' || pt === undefined || pt === null) delete payload.prediction_type
+    for (const k of Object.keys(payload)) {
+      const v = payload[k]
+      if (v === null || v === '' || (Array.isArray(v) && v.length === 0)) delete payload[k]
+    }
+    // 底模/数据集随丹方保存（自定义键，后端 RecipeData 忽略未知字段）
+    if (modelPath) payload.model_path = modelPath
+    if (datasetDir) payload.dataset_dir = datasetDir
+    return payload
+  }
+
+  const onSave = async (): Promise<string | null> => {
+    if (!name.trim()) {
+      setMsg('请填写丹方名称')
+      return null
+    }
+    setBusy(true)
+    setMsg(null)
+    try {
+      // 更新 = 删旧建新（后端无 PUT）
+      if (recipeId) {
+        try {
+          await deleteRecipe(recipeId)
+        } catch {
+          /* 忽略 */
+        }
+      }
+      const res = await createRecipe(name.trim(), family, buildPayload())
+      setRecipeId(res.recipe.id)
+      setMsg(`丹方「${name.trim()}」已保存`)
+      await refresh()
+      return res.recipe.id
+    } catch (e) {
+      setMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`)
+      return null
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onFire = async () => {
+    if (!modelPath || !datasetDir) {
+      setMsg('请先选择底模与数据集')
+      return
+    }
+    setBusy(true)
+    setMsg(null)
+    try {
+      // 1. 丹方：未保存则先保存（含底模/数据集路径）
+      let rid = recipeId
+      if (!rid) {
+        if (!name.trim()) setName(basename(modelPath).replace(/\.safetensors$/i, '') + '-丹方')
+        rid = await onSave()
+        if (!rid) return
+      }
+      // 2. 模型：按路径复用或自动注册
+      let model = models.find((m) => m.path === modelPath)
+      if (!model) {
+        model = await registerModel({ name: basename(modelPath).replace(/\.safetensors$/i, ''), family, path: modelPath })
+        setModels((prev) => [model as BaseModel, ...prev])
+      }
+      // 3. 数据集：按目录复用或自动注册
+      let ds = datasets.find((d) => d.dir === datasetDir)
+      if (!ds) {
+        ds = await createDataset(basename(datasetDir) || '数据集', datasetDir)
+        setDatasets((prev) => [ds as Dataset, ...prev])
+      }
+      // 4. 创建任务并点火
+      const run = await createRun({ dataset_id: ds.id, recipe_id: rid, base_model_id: model.id })
+      await startRun(run.id)
+      setMsg('已入队，自动开始炼丹')
+      props.onCreated(run.id)
+    } catch (e) {
+      setMsg(`点火失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // ---------- 载入已保存丹方 ----------
+
+  const onLoadRecipe = (r: RecipeView) => {
+    setRecipeId(r.id)
+    setName(r.name)
+    setFamily(r.family)
+    const d = r.data as Record<string, unknown>
+    setData({ ...defaultData(), ...d })
+    if (typeof d.model_path === 'string') setModelPath(d.model_path)
+    if (typeof d.dataset_dir === 'string') setDatasetDir(d.dataset_dir)
+    setMsg(`已载入丹方「${r.name}」`)
+  }
+
+  const onDeleteRecipe = async (r: RecipeView) => {
     if (!window.confirm(`删除丹方「${r.name}」？`)) return
     try {
       await deleteRecipe(r.id)
-      setRecipes((prev) => prev.filter((x) => x.id !== r.id))
+      if (recipeId === r.id) {
+        setRecipeId(null)
+        setName('')
+      }
+      await refresh()
     } catch (e) {
       setMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
+  const datasetInfo = datasets.find((d) => d.dir === datasetDir)
+
   return (
-    <Dialog title="丹方管理" onClose={props.onClose} wide>
-      {/* 我的丹方 */}
-      <section className="recipe-sec">
-        <h3>我的丹方</h3>
+    <div className="recipe-page">
+      {/* 已保存丹方 */}
+      <div className="panel recipe-load">
+        <div className="panel-title">
+          <h2>已保存丹方</h2>
+        </div>
         {recipes.length === 0 ? (
-          <p className="hint">还没有丹方，在下方填写参数并保存。</p>
+          <p className="hint">暂无保存的丹方；在下方面板配置并点「保存丹方」。</p>
         ) : (
           <ul className="runs datasets">
             {recipes.map((r) => (
-              <li key={r.id} className="run">
+              <li
+                key={r.id}
+                className={`run ${r.id === recipeId ? 'active' : ''}`}
+                onClick={() => onLoadRecipe(r)}
+              >
                 <span className="run-id">{r.name}</span>
                 <span className="run-state">{FAMILY_LABEL[r.family] ?? r.family}</span>
                 <span className="run-time">
-                  dim {String(r.data.network_dim ?? '?')} · lr {String(r.data.learning_rate ?? '?')} ·{' '}
-                  {String(r.data.max_train_epochs ?? '?')} epochs
+                  {typeof r.data.learning_rate === 'number' ? `lr ${r.data.learning_rate} · ` : ''}
+                  {typeof r.data.max_train_epochs === 'number' ? `${r.data.max_train_epochs} epochs` : ''}
                 </span>
-                <span className="gallery-actions">
-                  {props.onPick && (
-                    <button className="secondary" onClick={() => props.onPick?.(r)}>
-                      选用
-                    </button>
-                  )}
-                  <button className="danger" onClick={() => void onDelete(r)}>
-                    删除
-                  </button>
-                </span>
+                <button
+                  className="run-del"
+                  title="删除丹方"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void onDeleteRecipe(r)
+                  }}
+                >
+                  ✕
+                </button>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </div>
 
-      {/* 新建丹方（完整参数表单） */}
-      <section className="recipe-sec">
-        <h3>新建丹方</h3>
-        <div className="form-grid">
-          <label className="field">
-            <span>丹方名称</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如 NoobAI 角色丹" />
-          </label>
-          <label className="field">
-            <span>模型族</span>
-            <select value={family} onChange={(e) => setFamily(e.target.value)}>
-              <option value="sdxl1">SDXL 1.0（NoobAI/Illusion）</option>
-              <option value="dit_anima">Anima (DiT)</option>
-              <option value="dit_krea2">Krea 2 (DiT)</option>
-            </select>
-          </label>
+      {/* 丹方配置 */}
+      <div className="panel">
+        <h2>丹方配置</h2>
+
+        {/* 底模与数据集（选择即用，保存时随丹方记录） */}
+        <div className="form-sec">
+          <h4>底模与数据集</h4>
+          <div className="form-grid">
+            <div className="field wide">
+              <span>基底模型</span>
+              <div className="pick-row">
+                <button onClick={() => void onPickModel()} disabled={busy} className="secondary">
+                  选择底模…
+                </button>
+                <select value={family} onChange={(e) => setFamily(e.target.value)} title="底模所属模型族">
+                  <option value="sdxl1">SDXL（NoobAI/Illusion）</option>
+                  <option value="dit_anima">Anima</option>
+                  <option value="dit_krea2">Krea 2</option>
+                </select>
+              </div>
+              <div className={`pick-path ${modelPath ? '' : 'dim'}`} title={modelPath}>
+                {modelPath || '未选择底模（.safetensors）'}
+              </div>
+            </div>
+            <div className="field wide">
+              <span>数据集</span>
+              <div className="pick-row">
+                <button onClick={() => void onPickDataset()} disabled={busy} className="secondary">
+                  选择数据集…
+                </button>
+              </div>
+              <div className={`pick-path ${datasetDir ? '' : 'dim'}`} title={datasetDir}>
+                {datasetDir
+                  ? `${basename(datasetDir)}${datasetInfo ? `（${datasetInfo.image_count} 张）` : ''} · ${datasetDir}`
+                  : '未选择数据集（图片文件夹，每图配同名 .txt 描述）'}
+              </div>
+            </div>
+          </div>
         </div>
+
+        {/* 基本 */}
+        <div className="form-sec">
+          <h4>丹方名称</h4>
+          <div className="form-grid">
+            <label className="field wide">
+              <span>名称</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如 NoobAI 角色丹" />
+            </label>
+          </div>
+        </div>
+
         {FORM_SECTIONS.map((sec) => (
           <div key={sec.title} className="form-sec">
             <h4>{sec.title}</h4>
@@ -545,268 +670,17 @@ export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeV
             </div>
           </div>
         ))}
+
         <div className="actions">
-          <button onClick={() => void onCreate()} disabled={busy} className="primary">
+          <button onClick={() => void onSave()} disabled={busy} className="secondary">
             {busy ? '保存中…' : '保存丹方'}
+          </button>
+          <button onClick={() => void onFire()} disabled={busy} className="primary">
+            {busy ? '点火中…' : '点火炼丹'}
           </button>
           {msg && <span className="status-line">{msg}</span>}
         </div>
-      </section>
-    </Dialog>
-  )
-}
-
-/** 数据集管理：列表 / 注册（目录选择）/ 扫描 / 删除。 */
-export function DatasetManager(props: { onClose: () => void; onPick?: (d: Dataset) => void }) {
-  const [datasets, setDatasets] = useState<Dataset[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
-
-  const refresh = async () => {
-    const list = await listDatasets()
-    setDatasets(list)
-    setSelected((prev) => (prev && list.some((d) => d.id === prev) ? prev : list[0]?.id ?? null))
-  }
-
-  useEffect(() => {
-    void refresh().catch(() => {})
-  }, [])
-
-  const onPickDir = async () => {
-    setBusy(true)
-    setMsg(null)
-    try {
-      const path = await pickDir()
-      if (!path) return
-      const name = path.split(/[\\/]/).pop() ?? '数据集'
-      const ds = await createDataset(name, path)
-      await refresh()
-      setSelected(ds.id)
-      setMsg(`已注册数据集「${name}」，点「扫描」导入图像`)
-    } catch (e) {
-      setMsg(`注册失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onScan = async () => {
-    if (!selected) return
-    setBusy(true)
-    setMsg('扫描中…')
-    try {
-      const res = await scanDataset(selected)
-      setMsg(
-        `扫描完成：${res.report.total} 张有效 · ${res.report.duplicate_groups.length} 组重复 · ${res.report.buckets.length} 个桶`,
-      )
-      await refresh()
-    } catch (e) {
-      setMsg(`扫描失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onDelete = async (d: Dataset) => {
-    if (!window.confirm(`删除数据集「${d.name}」？仅移除记录，磁盘图片不受影响。`)) return
-    try {
-      await deleteDataset(d.id)
-      await refresh()
-    } catch (e) {
-      setMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
-
-  return (
-    <Dialog title="数据集" onClose={props.onClose}>
-      <div className="actions">
-        <button onClick={() => void onPickDir()} disabled={busy} className="secondary">
-          注册数据集（选择文件夹）…
-        </button>
-        {selected && (
-          <button onClick={() => void onScan()} disabled={busy} className="secondary">
-            扫描（导入/去重/分桶）
-          </button>
-        )}
       </div>
-      <ul className="runs datasets">
-        {datasets.length === 0 ? (
-          <p className="hint">还没有数据集，点上方按钮选择图片文件夹注册。</p>
-        ) : (
-          datasets.map((d) => (
-            <li
-              key={d.id}
-              className={`run ${d.id === selected ? 'active' : ''}`}
-              onClick={() => setSelected(d.id)}
-            >
-              <span className="run-id">{d.name}</span>
-              <span className="run-state">{d.image_count} 张</span>
-              <span className="run-time" title={d.dir}>
-                {d.dir}
-              </span>
-              <span className="gallery-actions">
-                {props.onPick && (
-                  <button
-                    className="secondary"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      props.onPick?.(d)
-                    }}
-                  >
-                    选用
-                  </button>
-                )}
-                <button
-                  className="danger"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void onDelete(d)
-                  }}
-                >
-                  删除
-                </button>
-              </span>
-            </li>
-          ))
-        )}
-      </ul>
-      {msg && <p className="status-line">{msg}</p>}
-      <p className="hint">提示：图片文件夹内每张图配一个同名 .txt 写描述（01.png + 01.txt），训练读取此描述。</p>
-    </Dialog>
-  )
-}
-
-/** 扁平操作条：选底模（文件对话框）→ 选数据集 → 选丹方 → 点火。 */
-export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRecipes: () => void }) {
-  const [models, setModels] = useState<BaseModel[]>([])
-  const [datasets, setDatasets] = useState<Dataset[]>([])
-  const [recipes, setRecipes] = useState<RecipeView[]>([])
-  const [family, setFamily] = useState('sdxl1')
-  const [modelId, setModelId] = useState('')
-  const [datasetId, setDatasetId] = useState('')
-  const [recipeId, setRecipeId] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<string | null>(null)
-  const [showDatasets, setShowDatasets] = useState(false)
-
-  const refresh = async () => {
-    const [m, d, r] = await Promise.all([listModels(), listDatasets(), listRecipes()])
-    setModels(m)
-    setDatasets(d)
-    setRecipes(r)
-    setModelId((prev) => prev || m[0]?.id || '')
-    setDatasetId((prev) => prev || d[0]?.id || '')
-    setRecipeId((prev) => prev || r[0]?.id || '')
-  }
-
-  useEffect(() => {
-    void refresh().catch(() => {})
-  }, [])
-
-  const onPickModel = async () => {
-    setBusy(true)
-    setMsg(null)
-    try {
-      const path = await pickFile()
-      if (!path) return // 用户取消
-      const base = path.split(/[\\/]/).pop()?.replace(/\.safetensors$/i, '') ?? '模型'
-      const m = await registerModel({ name: base, family, path })
-      setModels((prev) => [m, ...prev])
-      setModelId(m.id)
-      setMsg(`已选底模：${base}`)
-    } catch (e) {
-      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onFire = async () => {
-    if (!modelId || !datasetId || !recipeId) {
-      setMsg('请先选齐底模、数据集与丹方')
-      return
-    }
-    setBusy(true)
-    setMsg(null)
-    try {
-      const run = await createRun({
-        dataset_id: datasetId,
-        recipe_id: recipeId,
-        base_model_id: modelId,
-      })
-      await startRun(run.id)
-      setMsg('已入队，自动开始炼丹')
-      props.onCreated(run.id)
-    } catch (e) {
-      setMsg(`点火失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const selectedModel = models.find((m) => m.id === modelId) ?? null
-
-  return (
-    <div className="firebar">
-      <div className="firebar-row">
-        <button onClick={() => void onPickModel()} disabled={busy} className="secondary">
-          选择底模…
-        </button>
-        <select value={family} onChange={(e) => setFamily(e.target.value)} title="底模所属模型族">
-          <option value="sdxl1">SDXL</option>
-          <option value="dit_anima">Anima</option>
-          <option value="dit_krea2">Krea 2</option>
-        </select>
-      </div>
-      <span className={`firebar-model ${selectedModel ? '' : 'dim'}`} title={selectedModel?.path ?? ''}>
-        {selectedModel ? selectedModel.name : '未选择底模'}
-      </span>
-      <div className="firebar-row">
-        <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)} title="训练数据集">
-          {datasets.length === 0 ? (
-            <option value="">（暂无数据集）</option>
-          ) : (
-            datasets.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}（{d.image_count} 张）
-              </option>
-            ))
-          )}
-        </select>
-        <button onClick={() => setShowDatasets(true)} className="secondary" title="数据集管理（注册/扫描/删除）">
-          数据集
-        </button>
-      </div>
-      <div className="firebar-row">
-        <select value={recipeId} onChange={(e) => setRecipeId(e.target.value)} title="丹方">
-          {recipes.length === 0 ? (
-            <option value="">（暂无丹方，点「丹方」创建）</option>
-          ) : (
-            recipes.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))
-          )}
-        </select>
-        <button onClick={props.onOpenRecipes} className="secondary" title="丹方管理（新建/编辑参数）">
-          丹方
-        </button>
-      </div>
-      <button onClick={() => void onFire()} disabled={busy} className="primary firebar-fire">
-        {busy ? '处理中…' : '点火炼丹'}
-      </button>
-      {msg && <div className="firebar-msg">{msg}</div>}
-      {showDatasets && (
-        <DatasetManager
-          onClose={() => setShowDatasets(false)}
-          onPick={(d) => {
-            setDatasetId(d.id)
-            setShowDatasets(false)
-          }}
-        />
-      )}
     </div>
   )
 }

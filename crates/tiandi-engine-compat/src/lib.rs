@@ -113,8 +113,12 @@ impl SdScriptsTrainer {
         // 任务目录：日志/配置留在 runs/<id>；产物（LoRA/示例图）在 job.output_dir（output/<id>）
         let run_dir = self.runs_dir.join(&job.run_id);
         let logs_dir = run_dir.join("logs");
-        let samples_dir = std::path::PathBuf::from(&job.output_dir).join("samples");
+        // 示例图监控目录：TOML 的 output_dir = <output>/<run_id>/checkpoints，
+        // sd-scripts 采样图写到 `output_dir + "/sample"`（train_util.py），
+        // 因此实际位置为 <output>/<run_id>/checkpoints/sample——必须与
+        // kernel_runner 的 TIANDI_SAMPLE_DIR 完全一致，否则监控不到采样图。
         let checkpoints_dir = std::path::PathBuf::from(&job.output_dir).join("checkpoints");
+        let samples_dir = checkpoints_dir.join("sample");
         for d in [&run_dir, &logs_dir, &samples_dir, &checkpoints_dir] {
             std::fs::create_dir_all(d)
                 .map_err(|e| EngineError::Spawn(format!("创建任务目录失败：{e}")))?;
@@ -240,6 +244,29 @@ impl SdScriptsTrainer {
             } else {
                 (None, None, None)
             };
+            // 示例图提示词：kohya 的 sample_prompts 参数要求**文件路径**（.txt/.toml），
+            // 传字符串会因 os.path.isfile() 失败而直接跳过采样。生成提示词文件
+            // 到任务目录（runs/<id>/sample_prompts.txt），TOML 引用该路径；
+            // 提示词为空时兜底：触发词 → 通用默认（与 lora-scripts-next 同思路）。
+            let sample_prompts_file = if recipe.sample_every_n_epochs > 0 {
+                let prompts: Vec<String> = if recipe.sample_prompts.is_empty() {
+                    recipe
+                        .trigger_word
+                        .clone()
+                        .filter(|t| !t.trim().is_empty())
+                        .map(|t| vec![t])
+                        .unwrap_or_else(|| vec!["masterpiece, best quality, 1girl".to_string()])
+                } else {
+                    recipe.sample_prompts.clone()
+                };
+                let file = run_dir.join("sample_prompts.txt");
+                let content = prompts.join("\n") + "\n";
+                std::fs::write(&file, content)
+                    .map_err(|e| EngineError::Spawn(format!("写提示词文件失败：{e}")))?;
+                Some(file.to_string_lossy().into_owned())
+            } else {
+                None
+            };
             let paths = TrainPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
@@ -260,6 +287,7 @@ impl SdScriptsTrainer {
                 anima_vae,
                 anima_t5_tokenizer,
                 anima_qwen3_tokenizer: None,
+                sample_prompts_file,
             };
             // Anima 训练无论是否微调 TE 都必须加载 Qwen3 文本编码器（模型结构必需）：
             // 探测失败时给出明确中文指引（选择底模同目录文件，或在上方手动选择

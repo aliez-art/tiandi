@@ -291,14 +291,14 @@ pub fn build_sdscripts_toml(
     t.push('\n');
 
     // [sampling]
-    if !recipe.sample_prompts.is_empty() {
+    // 采样开关由 sample_prompts_file（lib.rs 生成的提示词文件）驱动：
+    // kohya 的 sample_prompts 参数必须是**文件路径**（字符串会被 isfile 检查拒绝）
+    if let Some(file) = &paths.sample_prompts_file {
         t.push_str("[sampling]\n");
-        t.push_str("sample_prompts = \"\"\"\n");
-        for p in &recipe.sample_prompts {
-            t.push_str(&toml_multiline_escape(p));
-            t.push('\n');
-        }
-        t.push_str("\"\"\"\n");
+        t.push_str(&format!(
+            "sample_prompts = {}\n",
+            toml_quote(&file.replace('\\', "/"))
+        ));
         t.push_str(&format!(
             "sample_sampler = {}\n",
             toml_quote(&recipe.sample_sampler)
@@ -499,14 +499,14 @@ pub fn build_sdscripts_toml_full(
     t.push('\n');
 
     // [sampling]
-    if !recipe.sample_prompts.is_empty() && recipe.sample_every_n_epochs > 0 {
+    // 采样开关由 sample_prompts_file（lib.rs 生成的提示词文件）驱动：
+    // kohya 的 sample_prompts 参数必须是**文件路径**（字符串会被 isfile 检查拒绝）
+    if let Some(file) = &paths.sample_prompts_file {
         t.push_str("[sampling]\n");
-        t.push_str("sample_prompts = \"\"\"\n");
-        for p in &recipe.sample_prompts {
-            t.push_str(&toml_multiline_escape(p));
-            t.push('\n');
-        }
-        t.push_str("\"\"\"\n");
+        t.push_str(&format!(
+            "sample_prompts = {}\n",
+            toml_quote(&file.replace('\\', "/"))
+        ));
         t.push_str(&format!(
             "sample_sampler = {}\n",
             toml_quote(&recipe.sample_sampler)
@@ -550,6 +550,8 @@ pub struct TrainPaths {
     pub anima_t5_tokenizer: Option<String>,
     /// Anima：Qwen3 分词器目录
     pub anima_qwen3_tokenizer: Option<String>,
+    /// 示例图提示词文件路径（kohya sample_prompts 需文件路径；None = 不采样）
+    pub sample_prompts_file: Option<String>,
 }
 
 /// 预热步数：按总步数比例换算。
@@ -613,35 +615,6 @@ fn toml_quote(s: &str) -> String {
     out
 }
 
-/// TOML 多行基本字符串（`"""..."""`）内的行转义：转义 `\` 与 `"""` 序列
-/// （`\` 在 TOML 多行字符串中是转义起始符；`"""` 会提前终止字符串）。
-fn toml_multiline_escape(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => {
-                // 三个及以上连续引号需转义，避免意外终止多行字符串
-                let mut n = 1;
-                while chars.peek() == Some(&'"') {
-                    chars.next();
-                    n += 1;
-                }
-                if n >= 3 {
-                    out.push_str("\\\"\\\"\\\"");
-                } else {
-                    for _ in 0..n {
-                        out.push('"');
-                    }
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 fn network_module(t: tiandi_recipe::NetworkType) -> &'static str {
     match t {
         tiandi_recipe::NetworkType::Lora => "lora",
@@ -694,6 +667,7 @@ mod tests {
             anima_vae: None,
             anima_t5_tokenizer: None,
             anima_qwen3_tokenizer: None,
+            sample_prompts_file: Some(r"D:\runs\r1\sample_prompts.txt".into()),
         }
     }
 
@@ -840,9 +814,11 @@ mod tests {
             toml.contains(r#"trigger_word = "say \"hi\" \\ ok""#),
             "{toml}"
         );
-        assert!(toml.contains("sample_prompts = \"\"\"\n"), "{toml}");
-        assert!(toml.contains("a \"quote\" prompt"), "{toml}");
-        assert!(toml.contains("back\\\\slash"), "{toml}");
+        // sample_prompts 现在指向提示词文件（kohya 要求文件路径），转义后输出
+        assert!(
+            toml.contains(r#"sample_prompts = "D:/runs/r1/sample_prompts.txt""#),
+            "{toml}"
+        );
         assert!(toml.contains(r#"negative_prompt = "bad \"x\"""#), "{toml}");
     }
 
@@ -854,6 +830,24 @@ mod tests {
         };
         let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
         assert!(toml.contains("trigger_word = \"zhongzi\""));
+    }
+
+    #[test]
+    fn sampling_switch_and_prompt_fallback() {
+        // 有提示词文件（lib.rs 生成）→ 输出 [sampling] 段并引用文件路径
+        let toml = build_sdscripts_toml(&RecipeData::default(), ModelFamily::Sdxl1, &paths());
+        assert!(toml.contains("[sampling]"), "{toml}");
+        assert!(
+            toml.contains(r#"sample_prompts = "D:/runs/r1/sample_prompts.txt""#),
+            "{toml}"
+        );
+        // 无提示词文件（采样关闭）→ 不输出 [sampling] 段
+        let no_sample = TrainPaths {
+            sample_prompts_file: None,
+            ..paths()
+        };
+        let toml2 = build_sdscripts_toml(&RecipeData::default(), ModelFamily::Sdxl1, &no_sample);
+        assert!(!toml2.contains("[sampling]"), "{toml2}");
     }
 
     #[test]

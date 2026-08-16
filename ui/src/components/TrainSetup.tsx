@@ -782,6 +782,15 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       showMsg('Krea 2 全量训练暂不支持（ai-toolkit 后端仅 LoRA）', true)
       return
     }
+    // 族匹配校验：底模族与丹方族不一致会在模型加载阶段崩溃，点火前拦截
+    const knownModel = models.find((m) => m.path === modelPath)
+    if (knownModel && knownModel.family !== family) {
+      showMsg(
+        `底模「${knownModel.name}」属于 ${knownModel.family} 族，与当前丹方族 ${family} 不匹配。请选择正确的模型族或底模`,
+        true,
+      )
+      return
+    }
     setBusy(true)
     showMsg(null)
     try {

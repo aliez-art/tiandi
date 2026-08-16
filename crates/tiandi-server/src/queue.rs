@@ -103,6 +103,17 @@ pub async fn build_job(
     if let Some(mid) = &base_model_id {
         let store = state.store.lock().await;
         let m = store.get_base_model(mid).map_err(|e| e.to_string())?;
+        // 族匹配校验：SDXL 丹方配 DiT 底模（或反之）会在内核模型加载阶段
+        // 直接崩溃（如 KeyError: input_blocks.0.0.weight），点火前拦截给出明确提示。
+        // 仅在有丹方时校验（无丹方 = mock 演示模式）。
+        if recipe_id.is_some() && m.family != family {
+            return Err(format!(
+                "底模「{}」属于 {} 族，与丹方 {} 族不匹配（会在模型加载阶段失败）。请在丹方页选择正确的底模或模型族",
+                m.name,
+                m.family.label(),
+                family.label()
+            ));
+        }
         base_model = m.path;
     } else {
         // 兜底：第一个注册模型
@@ -468,6 +479,52 @@ mod tests {
         try_pump(&st).await; // 空队列：不应 panic / 不应认领任何任务
         let s = st.store.lock().await;
         assert!(s.list_runs().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_job_rejects_family_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = test_state(tmp.path());
+        // sdxl1 丹方 + dit_anima 底模 → 组装报错（防止内核加载阶段炸炉）
+        let recipe = tiandi_core::Recipe::new(
+            String::from("sdxl-丹方"),
+            tiandi_core::ModelFamily::Sdxl1,
+            serde_json::json!({}),
+        );
+        let model = tiandi_core::BaseModel::new(
+            String::from("anima-底模"),
+            tiandi_core::ModelFamily::DitAnima,
+            Some("D:/x/anima.safetensors".into()),
+            None,
+            None,
+        );
+        let run = Run::new(None, None, None, None);
+        {
+            let s = st.store.lock().await;
+            s.insert_recipe(&recipe).unwrap();
+            s.insert_base_model(&model).unwrap();
+            s.insert_run(&run).unwrap();
+        }
+        let mut run = run;
+        run.recipe_id = Some(recipe.id.clone());
+        run.base_model_id = Some(model.id.clone());
+        let err = build_job(&st, &run).await.unwrap_err();
+        assert!(err.contains("不匹配"), "族不匹配应报错：{err}");
+        // 同族不报错
+        let ok_model = tiandi_core::BaseModel::new(
+            String::from("sdxl-底模"),
+            tiandi_core::ModelFamily::Sdxl1,
+            Some("D:/x/sdxl.safetensors".into()),
+            None,
+            None,
+        );
+        {
+            let s = st.store.lock().await;
+            s.insert_base_model(&ok_model).unwrap();
+        }
+        let mut run2 = run;
+        run2.base_model_id = Some(ok_model.id);
+        assert!(build_job(&st, &run2).await.is_ok());
     }
 
     #[test]

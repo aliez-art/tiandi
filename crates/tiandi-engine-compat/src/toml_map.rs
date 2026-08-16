@@ -271,6 +271,9 @@ pub fn build_sdscripts_toml(
         "train_data_dir = {}\n",
         toml_quote(&paths.dataset_dir.replace('\\', "/"))
     ));
+    // 描述文件扩展名：本项目约定图片旁同名 .txt（sd-scripts 默认 .caption，
+    // 不设置会把 .txt 描述全部当不存在）
+    t.push_str("caption_extension = \".txt\"\n");
     // sd-scripts 的 resolution 参数为字符串（"1024" 或 "1024,768" 多分辨率）
     t.push_str(&format!(
         "resolution = {}\n",
@@ -478,6 +481,8 @@ pub fn build_sdscripts_toml_full(
         "train_data_dir = {}\n",
         toml_quote(&paths.dataset_dir.replace('\\', "/"))
     ));
+    // 描述文件扩展名：本项目约定图片旁同名 .txt（sd-scripts 默认 .caption）
+    t.push_str("caption_extension = \".txt\"\n");
     t.push_str(&format!(
         "resolution = {}\n",
         toml_quote(&recipe.resolution.to_string())
@@ -719,6 +724,7 @@ mod tests {
             "cache_latents = true",
             "cache_text_encoder_outputs = true",
             "enable_bucket = true",
+            "caption_extension = \".txt\"",
             "min_snr_gamma = 5",
             "save_model_as = \"safetensors\"",
             "train_data_dir = \"D:/ds\"",

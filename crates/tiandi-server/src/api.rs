@@ -62,6 +62,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/runs", get(list_runs).post(create_run))
+        .route("/api/runs/previews", get(run_previews))
         .route("/api/runs/{id}", get(get_run).delete(delete_run))
         .route("/api/runs/{id}/start", post(start_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
@@ -286,6 +287,15 @@ async fn transition_run(
         to: run.state,
     });
     Ok(Json(run))
+}
+
+/// 任务最新示例图（炼丹记录列表缩略图）：{ run_id: sample_path }。
+async fn run_previews(
+    State(state): State<AppState>,
+) -> Result<Json<std::collections::HashMap<String, String>>, ApiError> {
+    let store = state.store.lock().await;
+    let rows = store.latest_sample_per_run()?;
+    Ok(Json(rows.into_iter().collect()))
 }
 
 async fn list_metrics(

@@ -72,6 +72,11 @@ pub fn build_aitk_yaml(recipe: &RecipeData, paths: &AitkPaths) -> String {
     s.push_str("          cache_latents_to_disk: true\n");
     // 分辨率桶：Krea 2 训练以 1K 为上限（RunComfy 指南 512+768+1024）
     s.push_str(&format!("          resolution: [{}]\n", recipe.resolution));
+    if let Some(v) = recipe.num_repeats {
+        if v > 1 {
+            s.push_str(&format!("          num_repeats: {v}\n"));
+        }
+    }
     // ---- train ----
     s.push_str("      train:\n");
     s.push_str(&format!("        batch_size: {}\n", recipe.batch_size));
@@ -120,9 +125,50 @@ pub fn build_aitk_yaml(recipe: &RecipeData, paths: &AitkPaths) -> String {
         paths.vae_root.replace('\\', "/")
     ));
     s.push_str("          max_text_length: 512\n");
-    // ---- sampling：冒烟/链路验证不采样（出图由外部工作流负责）----
-    s.push_str("      sample:\n");
-    s.push_str("        disable_sampling: true\n");
+    // ---- sampling：示例图（每 sample_every_n_epochs 轮出一批）----
+    if !recipe.sample_prompts.is_empty() {
+        s.push_str("      sample:\n");
+        s.push_str("        sampler: 'flowmatch'\n");
+        // 训练步数占比换算：sample_every 按轮 → 每 epochs/steps 换算为步
+        let steps = paths.steps.max(1);
+        let sample_every = if recipe.sample_every_n_epochs > 0 {
+            (steps as f64 / recipe.max_train_epochs.max(1) as f64 * recipe.sample_every_n_epochs as f64)
+                .ceil()
+                .max(1.0) as u64
+        } else {
+            0
+        };
+        if sample_every > 0 {
+            s.push_str(&format!("        sample_every: {sample_every}\n"));
+            s.push_str("        sample_start_step: 0\n");
+        }
+        if let Some(v) = recipe.sample_steps {
+            s.push_str(&format!("        sample_steps: {v}\n"));
+        } else {
+            s.push_str("        sample_steps: 30\n");
+        }
+        if let Some(v) = recipe.guidance_scale {
+            s.push_str(&format!("        guidance_scale: {v}\n"));
+        } else {
+            s.push_str("        guidance_scale: 4\n");
+        }
+        s.push_str("        width: 1024\n");
+        s.push_str("        height: 1024\n");
+        if let Some(v) = &recipe.negative_prompt {
+            s.push_str(&format!("        neg: \"{v}\"\n"));
+        } else {
+            s.push_str("        neg: \"\"\n");
+        }
+        s.push_str("        prompts:\n");
+        for p in &recipe.sample_prompts {
+            s.push_str(&format!("          - \"{p}\"\n"));
+        }
+        s.push_str("        seed: 42\n");
+        s.push_str("        walk_seed: false\n");
+    } else {
+        s.push_str("      sample:\n");
+        s.push_str("        disable_sampling: true\n");
+    }
     s
 }
 

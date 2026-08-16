@@ -84,6 +84,13 @@ export async function listRuns(): Promise<Run[]> {
   return res.json()
 }
 
+/** 每个任务最新示例图路径（{ run_id: sample_path }）。 */
+export async function fetchRunPreviews(): Promise<Record<string, string>> {
+  const res = await fetch(`${base()}/api/runs/previews`)
+  if (!res.ok) throw new Error(`previews ${res.status}`)
+  return res.json()
+}
+
 export function subscribeEvents(onEvent: (line: string) => void): EventSource {
   const es = new EventSource(`${base()}/api/runs/all/events`)
   es.onmessage = (e) => onEvent(e.data as string)

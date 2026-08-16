@@ -630,6 +630,20 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// 每个任务最新的示例图（kind='sample'），炼丹记录列表缩略图用。
+    pub fn latest_sample_per_run(&self) -> Result<Vec<(String, String)>, RepoError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT c.run_id, c.path FROM checkpoints c
+             WHERE c.kind = 'sample'
+               AND c.created_at = (
+                   SELECT MAX(created_at) FROM checkpoints
+                   WHERE run_id = c.run_id AND kind = 'sample'
+               )",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     // ---- Settings（设置） ----
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, RepoError> {

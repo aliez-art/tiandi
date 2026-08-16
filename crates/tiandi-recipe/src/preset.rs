@@ -53,6 +53,7 @@ fn sdxl_noobai_entry() -> RecipeFile {
         block_weights: None,
         trigger_word: None,
         prediction_type: None,
+        ..RecipeData::default()
     };
     RecipeFile::new("SDXL 入门（NoobAI/Illusion）", ModelFamily::Sdxl1, data)
 }
@@ -95,6 +96,7 @@ fn sdxl_advanced() -> RecipeFile {
         block_weights: Some("0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,1".into()),
         trigger_word: None,
         prediction_type: None,
+        ..RecipeData::default()
     };
     RecipeFile::new(
         "SDXL 进阶（低 LR + LoCon + 块权重）",
@@ -138,6 +140,7 @@ fn anima_entry() -> RecipeFile {
         block_weights: None,
         trigger_word: None,
         prediction_type: None,
+        ..RecipeData::default()
     };
     RecipeFile::new("Anima 入门（DiT）", ModelFamily::DitAnima, data)
 }
@@ -177,6 +180,7 @@ fn krea2_entry() -> RecipeFile {
         block_weights: None,
         trigger_word: None,
         prediction_type: None,
+        ..RecipeData::default()
     };
     RecipeFile::new("Krea 2 入门（DiT）", ModelFamily::DitKrea2, data)
 }
@@ -212,3 +216,4 @@ mod tests {
         assert!(families.contains(&ModelFamily::DitKrea2));
     }
 }
+

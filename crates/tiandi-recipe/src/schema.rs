@@ -178,6 +178,51 @@ pub struct RecipeData {
     pub sample_every_n_epochs: u32,
     pub sample_prompts: Vec<String>,
     pub sample_sampler: String,
+    // ---- 高级（M3：全参数扩展，参考 kohya_ss GUI）----
+    /// 网络 dropout（LoRA 权重随机丢弃比例）
+    pub network_dropout: Option<f64>,
+    /// rank dropout（行级丢弃）
+    pub rank_dropout: Option<f64>,
+    /// module dropout（模块级丢弃）
+    pub module_dropout: Option<f64>,
+    /// 卷积网络维度（LoCon/LoHa/LoKr 用）
+    pub conv_dim: Option<u32>,
+    /// 卷积网络 alpha
+    pub conv_alpha: Option<u32>,
+    /// 数据集重复次数（每张图重复 N 次，等效放大步数）
+    pub num_repeats: Option<u32>,
+    /// 总步数上限（覆盖 epochs×图数×repeats 的估算）
+    pub max_train_steps: Option<u32>,
+    /// 每 N 步保存检查点（0 = 关闭）
+    pub save_every_n_steps: Option<u32>,
+    /// 保存优化器状态（断点续训更完整，文件更大）
+    pub save_state: bool,
+    /// 保留最近 N 个状态目录
+    pub save_last_n_states: Option<u32>,
+    /// zero terminal SNR（末端噪声归零，提升暗部表现）
+    pub zero_terminal_snr: bool,
+    /// 自适应噪声偏移（noise_offset 的进阶版）
+    pub adaptive_noise_scale: Option<f64>,
+    /// 多分辨率噪声迭代（提升大图结构）
+    pub multires_noise_iterations: Option<u32>,
+    /// 多分辨率噪声折扣
+    pub multires_noise_discount: Option<f64>,
+    /// 最小时间步（噪声范围裁剪，0 = 默认）
+    pub min_timestep: Option<u32>,
+    /// 最大时间步
+    pub max_timestep: Option<u32>,
+    /// CLIP 跳层（SDXL 系常用 1~2）
+    pub clip_skip: Option<u32>,
+    /// 最大 token 长度（75/150/225/300）
+    pub max_token_length: Option<u32>,
+    /// 采样步数（示例图生成用）
+    pub sample_steps: Option<u32>,
+    /// 采样引导强度（示例图生成用）
+    pub guidance_scale: Option<f64>,
+    /// 采样负向提示词
+    pub negative_prompt: Option<String>,
+    /// 缓存 TE 输出到磁盘（省显存，首次慢）
+    pub cache_text_encoder_outputs_to_disk: bool,
     // ---- SDXL 族专属 ----
     /// block weights（"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1" 25 值）
     pub block_weights: Option<String>,
@@ -219,6 +264,28 @@ impl Default for RecipeData {
             sample_every_n_epochs: 5,
             sample_prompts: vec!["1girl, masterpiece, best quality".to_string()],
             sample_sampler: "euler_a".to_string(),
+            network_dropout: None,
+            rank_dropout: None,
+            module_dropout: None,
+            conv_dim: None,
+            conv_alpha: None,
+            num_repeats: None,
+            max_train_steps: None,
+            save_every_n_steps: None,
+            save_state: false,
+            save_last_n_states: None,
+            zero_terminal_snr: false,
+            adaptive_noise_scale: None,
+            multires_noise_iterations: None,
+            multires_noise_discount: None,
+            min_timestep: None,
+            max_timestep: None,
+            clip_skip: None,
+            max_token_length: None,
+            sample_steps: None,
+            guidance_scale: None,
+            negative_prompt: None,
+            cache_text_encoder_outputs_to_disk: false,
             block_weights: None,
             trigger_word: None,
             prediction_type: None,

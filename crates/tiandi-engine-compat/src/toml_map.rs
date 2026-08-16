@@ -69,6 +69,22 @@ pub fn build_sdscripts_toml(
     ));
     t.push_str(&format!("network_dim = {}\n", recipe.network_dim));
     t.push_str(&format!("network_alpha = {}\n", recipe.network_alpha));
+    // 高级网络参数（LoRA dropout / 卷积维度）
+    if let Some(v) = recipe.network_dropout {
+        t.push_str(&format!("network_dropout = {v}\n"));
+    }
+    if let Some(v) = recipe.rank_dropout {
+        t.push_str(&format!("rank_dropout = {v}\n"));
+    }
+    if let Some(v) = recipe.module_dropout {
+        t.push_str(&format!("module_dropout = {v}\n"));
+    }
+    if let Some(v) = recipe.conv_dim {
+        t.push_str(&format!("conv_dim = {v}\n"));
+    }
+    if let Some(v) = recipe.conv_alpha {
+        t.push_str(&format!("conv_alpha = {v}\n"));
+    }
     if let Some(bw) = &recipe.block_weights {
         t.push_str(&format!("down_lr_weight = \"{}\"\n", bw));
     }
@@ -137,18 +153,59 @@ pub fn build_sdscripts_toml(
     if let Some(no) = recipe.noise_offset {
         t.push_str(&format!("noise_offset = {no}\n"));
     }
+    if let Some(v) = recipe.adaptive_noise_scale {
+        t.push_str(&format!("adaptive_noise_scale = {v}\n"));
+    }
+    if let Some(v) = recipe.multires_noise_iterations {
+        t.push_str(&format!("multires_noise_iterations = {v}\n"));
+        if let Some(d) = recipe.multires_noise_discount {
+            t.push_str(&format!("multires_noise_discount = {d}\n"));
+        }
+    }
+    if recipe.zero_terminal_snr {
+        t.push_str("zero_terminal_snr = true\n");
+    }
+    if let Some(v) = recipe.min_timestep {
+        t.push_str(&format!("min_timestep = {v}\n"));
+    }
+    if let Some(v) = recipe.max_timestep {
+        t.push_str(&format!("max_timestep = {v}\n"));
+    }
+    if let Some(v) = recipe.clip_skip {
+        t.push_str(&format!("clip_skip = {v}\n"));
+    }
+    if let Some(v) = recipe.max_token_length {
+        t.push_str(&format!("max_token_length = {v}\n"));
+    }
     t.push_str(&format!("cache_latents = {}\n", recipe.cache_latents));
     // Anima 家族：不缓存 TE 输出（需训练 Qwen3 TE）；其余按丹方
     let cache_te = recipe.cache_text_encoder_outputs && family != ModelFamily::DitAnima;
     t.push_str(&format!("cache_text_encoder_outputs = {cache_te}\n"));
+    if recipe.cache_text_encoder_outputs_to_disk && cache_te {
+        t.push_str("cache_text_encoder_outputs_to_disk = true\n");
+    }
     t.push_str(&format!(
         "save_every_n_epochs = {}\n",
         recipe.save_every_n_epochs
     ));
+    if let Some(v) = recipe.save_every_n_steps {
+        if v > 0 {
+            t.push_str(&format!("save_every_n_steps = {v}\n"));
+        }
+    }
+    if recipe.save_state {
+        t.push_str("save_state = true\n");
+        if let Some(n) = recipe.save_last_n_states {
+            t.push_str(&format!("save_last_n_states = {n}\n"));
+        }
+    }
     t.push_str(&format!(
         "sample_every_n_epochs = {}\n",
         recipe.sample_every_n_epochs
     ));
+    if let Some(v) = recipe.max_train_steps {
+        t.push_str(&format!("max_train_steps = {v}\n"));
+    }
     t.push_str(&format!(
         "output_dir = \"{}\"\n",
         paths.output_dir.replace('\\', "/")
@@ -192,6 +249,11 @@ pub fn build_sdscripts_toml(
     // sd-scripts 的 resolution 参数为字符串（"1024" 或 "1024,768" 多分辨率）
     t.push_str(&format!("resolution = \"{}\"\n", recipe.resolution));
     t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
+    if let Some(v) = recipe.num_repeats {
+        if v > 1 {
+            t.push_str(&format!("num_repeats = {v}\n"));
+        }
+    }
     t.push('\n');
 
     // [sampling]
@@ -204,6 +266,15 @@ pub fn build_sdscripts_toml(
         }
         t.push_str("\"\"\"\n");
         t.push_str(&format!("sample_sampler = \"{}\"\n", recipe.sample_sampler));
+        if let Some(v) = recipe.sample_steps {
+            t.push_str(&format!("sample_steps = {v}\n"));
+        }
+        if let Some(v) = recipe.guidance_scale {
+            t.push_str(&format!("guidance_scale = {v}\n"));
+        }
+        if let Some(v) = &recipe.negative_prompt {
+            t.push_str(&format!("negative_prompt = \"{v}\"\n"));
+        }
         t.push('\n');
     }
 

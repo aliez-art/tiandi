@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  assetUrl,
   deleteRun,
   discoverBase,
   fetchHealth,
+  fetchRunPreviews,
   fetchSystem,
   listRuns,
   subscribeEvents,
@@ -33,6 +35,7 @@ export default function App() {
   const [system, setSystem] = useState<SystemInfo | null>(null)
   const [view, setView] = useState<'recipe' | 'runs'>('recipe')
   const [runs, setRuns] = useState<Run[]>([])
+  const [previews, setPreviews] = useState<Record<string, string>>({})
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const eventSeq = useRef(0)
@@ -59,6 +62,10 @@ export default function App() {
     try {
       const list = await listRuns()
       setRuns(list)
+      // 示例图缩略图（并行拉取）
+      void fetchRunPreviews()
+        .then(setPreviews)
+        .catch(() => {})
       // 自动选中第一个（若未选）
       setSelected((prev) => {
         if (prev && list.some((r) => r.id === prev)) return prev
@@ -207,6 +214,18 @@ export default function App() {
                         className={`run ${r.state} ${r.id === selected ? 'active' : ''}`}
                         onClick={() => setSelected(r.id)}
                       >
+                        {previews[r.id] ? (
+                          <img
+                            className="run-thumb"
+                            src={assetUrl(previews[r.id])}
+                            alt=""
+                            loading="lazy"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setSelected(r.id)
+                            }}
+                          />
+                        ) : null}
                         <span className="run-id">{r.id.slice(0, 8)}</span>
                         <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
                         <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>

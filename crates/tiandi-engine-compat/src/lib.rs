@@ -136,8 +136,11 @@ impl SdScriptsTrainer {
                     "Krea 2 资产未就绪（tiandi kernel prepare-krea2 <底模目录>）".into(),
                 )
             })?;
-            // 总步数 = epochs × 数据集图片数（ai-toolkit 按步训练）
-            let steps = dataset_image_count(job.dataset_dir.as_str()) as u64 * recipe.max_train_epochs as u64;
+            // 总步数 = epochs × 图片数 × 重复次数（ai-toolkit 按步训练）
+            let repeats = recipe.num_repeats.unwrap_or(1).max(1) as u64;
+            let steps = dataset_image_count(job.dataset_dir.as_str()) as u64
+                * recipe.max_train_epochs as u64
+                * repeats;
             let paths = AitkPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),

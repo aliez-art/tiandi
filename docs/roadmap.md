@@ -42,7 +42,7 @@
 - [x] 断点续训：resume 状态落盘 + 崩溃恢复扫描（服务启动 Preparing/Running→Failed 可重试）+ UI 一键续丹（检测 runs/<id>/checkpoints 最新 state 目录）
 - [x] 指标曲线（loss/lr）内置图表（替代 TensorBoard 依赖）；GPU/显存监控（nvidia-smi 解析 + 前端 3s 轮询）
 - [x] Anima 支持：丹方族 DitAnima + BackendSdScripts 参数映射扩展（Qwen3 TE、t5 旧分词器本地化、attn_mode=torch、cache_text_encoder_outputs=false、T-LoRA 走 lora_anima）——**真实 Anima LoRA 训练已打通**（anima-base-v1.0 + qwen_3_06b_base + qwen_image_vae 全离线，run ddb1423c queued→done，产物 63.2MB 入药库）
-- [ ] Illusion 注册验证（SDXL 族第二个检查点，同一管线；待用户提供 Illusion 底模）
+- [x] Illusion 注册验证（SDXL 族第二个检查点，同一管线）——**真实训练打通**（illustriousXL_v01 全离线，loss 0.21→0.11，产物 81.5MB 入药库）；同步验证 NoobAI 四变体（chenkin noob / Chenkin-RF / Epsilon-11 / V-Pred-065），其中 V 预测模型新增丹方 `prediction_type` 字段（映射 sd-scripts `v_parameterization`）
 - [x] 镜像源设置（HF_ENDPOINT/PIP_INDEX_URL 注入内核）与系统通知
 
 **退出**：队列连续跑完 ≥3 个任务（含失败恢复）；Anima LoRA 训练成功；Illusion 训练成功。

@@ -100,6 +100,8 @@ async fn handle_event(
         }
         Event::Done { .. } => {
             if !run.state.is_terminal() {
+                // 训练完成：扫描 checkpoints 目录，把 LoRA 产物入库（药库）
+                scan_lora_artifacts(&store, runs_dir, &run_id);
                 advance(&mut store, bus, &run_id, run.state, RunState::Done).await;
             }
         }
@@ -174,6 +176,46 @@ fn hue_to_rgb(h: f32, t: f32) -> u8 {
     };
     let m = v - c;
     ((r + m) * 255.0) as u8
+}
+
+/// 扫描 runs/<id>/checkpoints 下的 LoRA 产物（*.safetensors）入库。
+fn scan_lora_artifacts(
+    store: &tokio::sync::MutexGuard<'_, tiandi_state::Store>,
+    runs_dir: &Path,
+    run_id: &str,
+) {
+    let ckpts = runs_dir.join(run_id).join("checkpoints");
+    let Ok(entries) = std::fs::read_dir(&ckpts) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !path.is_file() || !name.ends_with(".safetensors") {
+            continue;
+        }
+        // 已入库则跳过（幂等）
+        let rel = path
+            .strip_prefix(runs_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let existing = store
+            .list_checkpoints(run_id)
+            .unwrap_or_default()
+            .iter()
+            .any(|c| c.path == rel);
+        if existing {
+            continue;
+        }
+        let _ = store.insert_checkpoint(&tiandi_core::Checkpoint {
+            id: uuid::Uuid::new_v4().to_string(),
+            run_id: run_id.to_string(),
+            kind: "lora".into(),
+            path: rel,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        });
+    }
 }
 
 /// 推进状态机：若非法（如 Queued→Running 中间态缺失），沿合法路径补跳。

@@ -136,8 +136,22 @@ pub fn cmd_kernel_install(workspace: &Path, torch_index: &str) {
         .expect("依赖安装失败");
     }
 
-    // 6. 内核清单
-    println!("\n[6/6] 写入内核清单…");
+    // 6. accelerate 默认配置（首次 launch 会进交互向导卡死，预生成）
+    println!("\n[6/7] 生成 accelerate 默认配置…");
+    let accelerate_exe = if cfg!(windows) {
+        venv.join("Scripts/accelerate.exe")
+    } else {
+        venv.join("bin/accelerate")
+    };
+    if accelerate_exe.exists() {
+        let _ = run(
+            &[accelerate_exe.to_str().unwrap(), "config", "default"],
+            None,
+        );
+    }
+
+    // 7. 内核清单
+    println!("\n[7/7] 写入内核清单…");
     let torch_ver = Command::new(&venv_python)
         .args(["-c", "import torch; print(torch.__version__)"])
         .output()

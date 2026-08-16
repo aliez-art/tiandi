@@ -34,7 +34,8 @@ pub struct SdScriptsTrainer {
 
 impl SdScriptsTrainer {
     pub fn new(bus: EventBus, runs_dir: PathBuf, wrapper: PathBuf) -> Self {
-        let env = KernelEnv::detect();
+        // 优先读工作区 kernel.json（venv python + sd-scripts）；回退系统 Python
+        let env = KernelEnv::detect_for(runs_dir.parent());
         Self {
             bus,
             env,
@@ -53,9 +54,34 @@ impl SdScriptsTrainer {
         self.env.message.as_deref()
     }
 
+    /// 内核环境（python/sd-scripts；供打标等共享内核的路径使用）。
+    pub fn kernel_env(&self) -> &KernelEnv {
+        &self.env
+    }
+
     /// 运行目录（runs/）。
     pub fn runs_dir(&self) -> &std::path::Path {
         &self.runs_dir
+    }
+
+    /// 本地 tokenizer 目录（<workspace>/tokenizers/{clip-l,clip-g}，存在才返回）。
+    fn local_tokenizers(&self) -> (Option<String>, Option<String>) {
+        let Some(sd_scripts) = &self.env.sd_scripts else {
+            return (None, None);
+        };
+        // sd_scripts = <ws>/.kernel/sd-scripts → workspace = 上两级
+        let ws = sd_scripts.parent().and_then(|p| p.parent());
+        let Some(ws) = ws else { return (None, None) };
+        let clip_l = ws.join("tokenizers/clip-l");
+        let clip_g = ws.join("tokenizers/clip-g");
+        (
+            clip_l
+                .is_dir()
+                .then(|| clip_l.to_string_lossy().into_owned()),
+            clip_g
+                .is_dir()
+                .then(|| clip_g.to_string_lossy().into_owned()),
+        )
     }
 
     fn kernel_launch(&self, job: &TrainJob, mode: KernelMode) -> Result<KernelLaunch, EngineError> {
@@ -82,6 +108,8 @@ impl SdScriptsTrainer {
         } else {
             let recipe: RecipeData = serde_json::from_value(job.params.clone())
                 .map_err(|e| EngineError::Spawn(format!("丹方参数解析失败：{e}")))?;
+            // 本地 tokenizer（离线化：<workspace>/tokenizers/{clip-l,clip-g}）
+            let (tokenizer, tokenizer2) = self.local_tokenizers();
             let paths = TrainPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
@@ -93,25 +121,42 @@ impl SdScriptsTrainer {
                     .to_string(),
                 logging_dir: logs_dir.to_string_lossy().into_owned(),
                 resume: job.resume_dir.clone(),
+                tokenizer,
+                tokenizer2,
             };
             let toml = build_sdscripts_toml(&recipe, job.family, &paths);
             std::fs::write(&config_path, toml)
                 .map_err(|e| EngineError::Spawn(format!("写训练配置失败：{e}")))?;
         }
 
-        // 环境变量：run_id 供事件归属；sample 目录供 mock 出图；设置注入（镜像源等）
+        // 环境变量：run_id 供事件归属；sample 目录供 mock 出图；设置注入（镜像源等）；
+        // 训练脚本按模型族指定（在 sd-scripts 目录下）
+        // 训练内核强制离线（HF 缓存已种入 tokenizer；模型/数据集本地化，网络抖动不阻断训练）
         let mut env = vec![
             ("TIANDI_RUN_ID".to_string(), job.run_id.clone()),
             (
                 "TIANDI_SAMPLE_DIR".to_string(),
                 samples_dir.to_string_lossy().into_owned(),
             ),
+            ("HF_HUB_OFFLINE".to_string(), "1".into()),
+            ("TRANSFORMERS_OFFLINE".to_string(), "1".into()),
         ];
         env.extend(job.env.iter().cloned());
+        if mode == KernelMode::SdScripts {
+            let script = match job.family {
+                tiandi_core::ModelFamily::Sdxl1 => "sdxl_train_network.py",
+                tiandi_core::ModelFamily::DitAnima => "anima_train_network.py",
+                tiandi_core::ModelFamily::DitKrea2 => "krea2_train_network.py",
+            };
+            env.push(("TIANDI_TRAIN_SCRIPT".into(), script.into()));
+        }
         if mode == KernelMode::Mock {
             env.push(("TIANDI_MOCK_TOTAL".into(), "60".into()));
             env.push(("TIANDI_MOCK_INTERVAL".into(), "0.15".into()));
         }
+
+        // cwd：sd-scripts 目录（训练脚本相对解析）；未知时用任务目录
+        let cwd = self.env.sd_scripts.clone().unwrap_or(run_dir.clone());
 
         Ok(KernelLaunch {
             python,
@@ -119,12 +164,18 @@ impl SdScriptsTrainer {
             config_path,
             mode,
             env,
-            cwd: run_dir.clone(),
+            cwd,
         })
     }
 
     fn start_kernel(&self, job: &TrainJob, mode: KernelMode) -> Result<(), EngineError> {
         let launch = self.kernel_launch(job, mode)?;
+        tracing::info!(
+            "start_kernel: run={} python={} mode={}",
+            job.run_id,
+            launch.python.display(),
+            mode.as_str()
+        );
         let run_id = job.run_id.clone();
         let bus = self.bus.clone();
         let handles = self.handles.clone();

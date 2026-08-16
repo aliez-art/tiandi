@@ -253,7 +253,8 @@ async fn run_tagging(
     std::fs::write(&tmp, "# tagger\n")
         .map_err(|e| ApiError::Internal(format!("写配置失败：{e}")))?;
 
-    let env = KernelEnv::detect();
+    // 内核环境（优先 venv；wd14 需要 sd-scripts 路径）
+    let env = state.trainer.kernel_env().clone();
     let python = env.python.ok_or_else(|| {
         ApiError::BadRequest(
             env.message
@@ -262,16 +263,32 @@ async fn run_tagging(
         )
     })?;
 
+    let mut launch_env = vec![
+        ("TIANDI_RUN_ID".into(), format!("tag-{id}")),
+        ("TIANDI_TAGGER_DIR".into(), dataset_dir.clone()),
+        ("TIANDI_TAGGER_MODE".into(), mode.clone()),
+    ];
+    if mode == "wd14" {
+        let wd14_script = env
+            .sd_scripts
+            .as_ref()
+            .map(|s| s.join("finetune/tag_images_by_wd14_tagger.py"))
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                ApiError::BadRequest(
+                    "WD14 打标需要训练内核（kernel.json 中 sd-scripts 未找到）。请先运行 `tiandi kernel install`".into(),
+                )
+            })?;
+        launch_env.push(("TIANDI_WD14_SCRIPT".into(), wd14_script));
+    }
+
     let launch = KernelLaunch {
         python,
         wrapper: crate::default_wrapper_path(),
         config_path: tmp,
         mode: KernelMode::Tagger,
-        env: vec![
-            ("TIANDI_RUN_ID".into(), format!("tag-{id}")),
-            ("TIANDI_TAGGER_DIR".into(), dataset_dir.clone()),
-            ("TIANDI_TAGGER_MODE".into(), mode.clone()),
-        ],
+        env: launch_env,
         cwd: root.clone(),
     };
 
@@ -330,7 +347,7 @@ fn caption_path_for(root: &FsPath, image_rel: &str) -> PathBuf {
     root.join(stem).with_extension("txt")
 }
 
-use tiandi_engine_compat::kernel::{KernelEnv, KernelLaunch, KernelMode};
+use tiandi_engine_compat::kernel::{KernelLaunch, KernelMode};
 
 #[cfg(test)]
 mod tests {

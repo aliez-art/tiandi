@@ -94,7 +94,11 @@ def run_mock(config_path: str) -> None:
 def run_sdscripts(config_path: str) -> None:
     """启动 accelerate launch <train_script> --config_file <toml>，解析 kohya 进度行。"""
     train_script = os.environ.get("TIANDI_TRAIN_SCRIPT", "sdxl_train_network.py")
-    cmd = ["accelerate", "launch", train_script, "--config_file", config_path]
+    # accelerate 在 venv/Scripts 下（venv python 未激活时不在 PATH）
+    scripts_dir = os.path.dirname(sys.executable)
+    accelerate_exe = os.path.join(scripts_dir, "accelerate.exe" if os.name == "nt" else "accelerate")
+    accelerate = accelerate_exe if os.path.exists(accelerate_exe) else "accelerate"
+    cmd = [accelerate, "launch", train_script, "--config_file", config_path]
     log(f"启动内核：{' '.join(cmd)}")
     try:
         proc = subprocess.Popen(
@@ -105,6 +109,9 @@ def run_sdscripts(config_path: str) -> None:
             bufsize=1,
             encoding="utf-8",
             errors="replace",
+            # 关键：训练子进程不继承控制管道（Rust 侧 stdin 保持打开时，
+            # 脚本内任何 stdin 读取都会永久阻塞；DEVNULL 保证读到 EOF）
+            stdin=subprocess.DEVNULL,
         )
     except FileNotFoundError:
         emit({"type": "fail", "code": 127, "tail": "accelerate 未找到：请先完成内核环境安装（tiandi kernel install）"})
@@ -126,21 +133,42 @@ def run_sdscripts(config_path: str) -> None:
 
     threading.Thread(target=control_loop, daemon=True).start()
 
+    # 终态事件兜底：无论子进程如何退出，确保 done/fail 必然发出
+    code = None
     tail_buf = []
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        # 原始日志转发到 stderr（Rust 侧统一落文件）
-        print(line, file=sys.stderr, flush=True)
-        tail_buf.append(line)
-        if len(tail_buf) > 50:
-            tail_buf.pop(0)
-        progress = parse_kohya_progress(line)
-        if progress:
-            emit({"type": "progress", **progress})
-        elif "saving checkpoint" in line.lower():
-            log(line)
-
-    code = proc.wait()
+    try:
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            # 原始日志转发到 stderr：UTF-8 字节直写（locale GBK 编码器对
+            # tqdm 乱码符号会抛 OSError 22，errors=replace 兜底）
+            sys.stderr.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+            sys.stderr.buffer.flush()
+            tail_buf.append(line)
+            if len(tail_buf) > 50:
+                tail_buf.pop(0)
+            progress = parse_kohya_progress(line)
+            if progress:
+                run_id = os.environ.get("TIANDI_RUN_ID", "")
+                emit({"type": "progress", **progress})
+                if "loss" in progress:
+                    emit({
+                        "type": "metric",
+                        "run_id": run_id,
+                        "step": progress.get("step", 0),
+                        "loss": progress.get("loss"),
+                        "lr": progress.get("lr"),
+                    })
+            elif "saving checkpoint" in line.lower():
+                log(line)
+        code = proc.wait()
+    except Exception as exc:  # noqa: BLE001
+        emit({"type": "fail", "code": 1, "tail": str(exc)})
+        return
+    finally:
+        if code is None:
+            if proc.poll() is None:
+                kill_tree(proc)
+            code = proc.wait()
     if code == 0:
         emit({"type": "done", "code": 0})
     else:
@@ -155,18 +183,20 @@ def parse_kohya_progress(line: str):
     if "steps:" not in line or "|" not in line:
         return None
     try:
-        head, rest = line.split("|", 2)[1], line.split("|", 2)[2]
-        cur, total = [int(x) for x in head.split("/")[:2]]
+        # tqdm 行以 "|" 分隔：前缀、进度条、统计段（统计段形如 "1/30 [00:35<17:04, 35.34s/it]"）
+        parts = line.split("|")
+        seg = parts[2].strip().split()[0]  # "1/30"
+        cur, total = [int(x) for x in seg.split("/")[:2]]
     except (ValueError, IndexError):
         return None
-    event = {"step": cur, "epoch": 0.0}
+    event = {"step": cur, "total": total, "epoch": 0.0}
     if total > 0:
         event["epoch"] = round(cur / total, 4)
     loss = None
     lr = None
-    if "loss=" in rest:
+    if "loss=" in line:
         try:
-            loss = float(rest.split("loss=")[1].split(",")[0].split("]")[0].strip())
+            loss = float(line.split("loss=")[1].split(",")[0].split("]")[0].strip())
         except (ValueError, IndexError):
             pass
     if loss is not None:
@@ -261,7 +291,8 @@ def _run_wd14(dataset_dir: str, images: list) -> None:
                             text=True, encoding="utf-8", errors="replace")
     for line in proc.stdout:
         line = line.rstrip()
-        print(line, file=sys.stderr, flush=True)
+        sys.stderr.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+        sys.stderr.buffer.flush()
         tail = line.strip()
         if tail:
             log(tail)

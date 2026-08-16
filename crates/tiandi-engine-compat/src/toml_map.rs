@@ -22,6 +22,13 @@ pub fn build_sdscripts_toml(
         "pretrained_model_name_or_path = \"{}\"\n",
         paths.base_model.replace('\\', "/")
     ));
+    // tokenizer 是 sd-scripts 顶层（model 相关）参数，放 [model] 段
+    if let Some(tok) = &paths.tokenizer {
+        t.push_str(&format!("tokenizer = \"{}\"\n", tok.replace('\\', "/")));
+    }
+    if let Some(tok2) = &paths.tokenizer2 {
+        t.push_str(&format!("tokenizer2 = \"{}\"\n", tok2.replace('\\', "/")));
+    }
     t.push('\n');
 
     // [network]
@@ -48,7 +55,11 @@ pub fn build_sdscripts_toml(
     // [training]
     t.push_str("[training]\n");
     t.push_str(&format!("learning_rate = {}\n", recipe.learning_rate));
-    if let Some(te) = recipe.text_encoder_lr {
+    // sd-scripts 规则：缓存 TE 输出时只能训练 UNet（TE 冻结）
+    if recipe.cache_text_encoder_outputs {
+        t.push_str("text_encoder_lr = 0\n");
+        t.push_str("network_train_unet_only = true\n");
+    } else if let Some(te) = recipe.text_encoder_lr {
         t.push_str(&format!("text_encoder_lr = {te}\n"));
     }
     if let Some(u) = recipe.unet_lr {
@@ -74,10 +85,16 @@ pub fn build_sdscripts_toml(
         recipe.gradient_accumulation_steps
     ));
     t.push_str(&format!("max_grad_norm = {}\n", recipe.max_grad_norm));
-    t.push_str(&format!("shuffle_caption = {}\n", recipe.shuffle_caption));
-    t.push_str(&format!("keep_tokens = {}\n", recipe.keep_tokens));
-    if let Some(cd) = recipe.caption_dropout_rate {
-        t.push_str(&format!("caption_dropout_rate = {cd}\n"));
+    // sd-scripts 规则：缓存 TE 输出时禁用 caption 增强（shuffle/dropout）
+    if recipe.cache_text_encoder_outputs {
+        t.push_str("shuffle_caption = false\n");
+        t.push_str(&format!("keep_tokens = {}\n", recipe.keep_tokens));
+    } else {
+        t.push_str(&format!("shuffle_caption = {}\n", recipe.shuffle_caption));
+        t.push_str(&format!("keep_tokens = {}\n", recipe.keep_tokens));
+        if let Some(cd) = recipe.caption_dropout_rate {
+            t.push_str(&format!("caption_dropout_rate = {cd}\n"));
+        }
     }
     if let Some(snr) = recipe.min_snr_gamma {
         t.push_str(&format!("min_snr_gamma = {snr}\n"));
@@ -123,7 +140,8 @@ pub fn build_sdscripts_toml(
         "train_data_dir = \"{}\"\n",
         paths.dataset_dir.replace('\\', "/")
     ));
-    t.push_str(&format!("resolution = {}\n", recipe.resolution));
+    // sd-scripts 的 resolution 参数为字符串（"1024" 或 "1024,768" 多分辨率）
+    t.push_str(&format!("resolution = \"{}\"\n", recipe.resolution));
     t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
     t.push('\n');
 
@@ -161,6 +179,10 @@ pub struct TrainPaths {
     pub logging_dir: String,
     /// 断点续训（sd-scripts state 目录，可选）
     pub resume: Option<String>,
+    /// 本地 CLIP-L tokenizer 目录（可选；离线化，避免运行时下载）
+    pub tokenizer: Option<String>,
+    /// 本地 CLIP-G tokenizer2 目录（可选；SDXL 双编码器）
+    pub tokenizer2: Option<String>,
 }
 
 /// 预热步数：按总步数比例换算（M1 估算：epochs × 1000 步/轮基准）。
@@ -215,6 +237,8 @@ mod tests {
             output_name: "noobai-lora".into(),
             logging_dir: r"D:\runs\r1\logs".into(),
             resume: None,
+            tokenizer: None,
+            tokenizer2: None,
         }
     }
 

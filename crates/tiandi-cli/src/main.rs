@@ -102,6 +102,12 @@ enum ModelsCommand {
 
 #[tokio::main]
 async fn main() {
+    // panic 诊断：崩溃时打印位置（server 异常消失排查用）
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("[PANIC] {info}");
+        let bt = std::backtrace::Backtrace::force_capture();
+        eprintln!("[PANIC-BT] {bt}");
+    }));
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -202,6 +208,16 @@ async fn cmd_server(dir: &std::path::Path, port: u16, demo: bool, web: bool) {
             std::process::exit(1);
         }
     };
+    // panic 诊断：崩溃时写工作区 panic.log（重定向缓冲会吞 stderr）
+    let panic_root = root.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = format!(
+            "[PANIC] {info}\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+        let _ = std::fs::write(panic_root.join("panic.log"), &msg);
+        eprintln!("{msg}");
+    }));
     let state = AppState::new(
         store,
         tiandi_core::EventBus::default(),

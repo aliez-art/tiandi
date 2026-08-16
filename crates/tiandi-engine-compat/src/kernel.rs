@@ -118,21 +118,56 @@ pub fn spawn_kernel(
 
     let handle = KernelHandle { child, stdin };
 
-    // stdout → 事件（逐行 JSON）
+    // stdout → 事件（逐行 JSON）；EOF 兜底：进程退出但无终态事件（崩溃/被杀）→ 发 Fail
+    // 注意：Windows 下内核子进程可能输出 GBK 字节（tqdm 等），用字节级读取 + lossy 解码，
+    // 避免 lines() 遇非法 UTF-8 提前退出导致管道不再被读（wrapper 写阻塞）
+    let terminated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let term_flag = terminated.clone();
     tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                on_event(value);
+        let mut reader = BufReader::new(stdout);
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let line = String::from_utf8_lossy(&buf).trim().to_string();
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                        if let Some(t) = value.get("type").and_then(|v| v.as_str()) {
+                            if matches!(t, "done" | "fail") {
+                                term_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+                        on_event(value);
+                    }
+                }
+                Err(_) => break,
             }
+        }
+        if !term_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            // 内核进程已退出但未发终态事件（崩溃/被外部终止）
+            on_event(serde_json::json!({
+                "type": "fail",
+                "code": 1,
+                "tail": "内核进程意外退出（未收到 done/fail 事件）"
+            }));
         }
     });
 
-    // stderr → 训练日志转发（原始输出，供日志文件/终端）
+    // stderr → 训练日志转发（字节级 + lossy：内核输出可能含 GBK 字节）
     tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            tracing::info!("[kernel] {line}");
+        let mut reader = BufReader::new(stderr);
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let line = String::from_utf8_lossy(&buf);
+                    tracing::info!("[kernel] {}", line.trim_end());
+                }
+                Err(_) => break,
+            }
         }
     });
 
@@ -208,23 +243,37 @@ pub fn publish_event(bus: &EventBus, value: &serde_json::Value, run_id: &str) {
     }
 }
 
-/// 内核环境引导（M1：检测系统 Python；venv 引导随真实内核安装落地）。
+/// 内核环境引导：优先读取工作区 kernel.json（venv python + sd-scripts 路径），
+/// 未安装内核时回退系统 Python（mock/打标用）。
 #[derive(Debug, Clone)]
 pub struct KernelEnv {
     pub python: Option<PathBuf>,
+    pub sd_scripts: Option<PathBuf>,
     pub message: Option<String>,
 }
 
 impl KernelEnv {
-    pub fn detect() -> Self {
+    /// `workspace`：工作区根（含 `.kernel/kernel.json`；None = 不检查内核清单）。
+    pub fn detect_for(workspace: Option<&Path>) -> Self {
+        if let Some(ws) = workspace {
+            if let Some((python, sd_scripts)) = read_kernel_manifest(ws) {
+                return Self {
+                    python: Some(python),
+                    sd_scripts,
+                    message: None,
+                };
+            }
+        }
         if let Some(p) = find_python() {
             Self {
                 python: Some(p),
+                sd_scripts: None,
                 message: None,
             }
         } else {
             Self {
                 python: None,
+                sd_scripts: None,
                 message: Some(
                     "未检测到 Python。请安装 Python 3.12+（https://www.python.org/downloads/），\
                      或运行 `tiandi doctor` 查看指引"
@@ -234,9 +283,29 @@ impl KernelEnv {
         }
     }
 
+    /// 兼容旧调用（无工作区上下文）。
+    pub fn detect() -> Self {
+        Self::detect_for(None)
+    }
+
     /// 是否具备运行内核的条件。
     pub fn ready(&self) -> bool {
         self.python.is_some()
+    }
+}
+
+/// 读取 `<workspace>/.kernel/kernel.json`（kernel install 产物）。
+fn read_kernel_manifest(workspace: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    let path = workspace.join(".kernel/kernel.json");
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let python = v.get("python")?.as_str()?;
+    let sd_scripts = v.get("sd_scripts").and_then(|s| s.as_str());
+    let p = PathBuf::from(python);
+    if p.exists() {
+        Some((p, sd_scripts.map(PathBuf::from)))
+    } else {
+        None
     }
 }
 

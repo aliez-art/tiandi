@@ -178,6 +178,24 @@ pub fn validate_recipe(family: ModelFamily, data: &RecipeData) -> Vec<RecipeIssu
         );
     }
 
+    // ---- 缓存与 caption 增强冲突（sd-scripts 规则） ----
+    if data.cache_text_encoder_outputs {
+        if data.shuffle_caption {
+            issue(
+                IssueLevel::Warning,
+                "shuffle_caption",
+                "缓存文本编码器输出时 shuffle_caption 无效（sd-scripts 会禁用），如需随机打乱请关闭缓存".into(),
+            );
+        }
+        if data.caption_dropout_rate.is_some() {
+            issue(
+                IssueLevel::Warning,
+                "caption_dropout_rate",
+                "缓存文本编码器输出时 caption_dropout_rate 无效（sd-scripts 会禁用）".into(),
+            );
+        }
+    }
+
     issues
 }
 

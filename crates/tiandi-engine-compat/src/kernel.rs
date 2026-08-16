@@ -79,7 +79,6 @@ pub enum KernelMode {
     Mock,
     SdScripts,
     Aitk,
-    Tagger,
 }
 
 impl KernelMode {
@@ -88,7 +87,6 @@ impl KernelMode {
             Self::Mock => "mock",
             Self::SdScripts => "sdscripts",
             Self::Aitk => "aitk",
-            Self::Tagger => "tagger",
         }
     }
 }

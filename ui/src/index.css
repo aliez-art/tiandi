@@ -300,3 +300,27 @@ textarea {
   font-family: inherit;
   resize: vertical;
 }
+
+/* ---------- 新建炼丹 / 丹方管理 弹窗 ---------- */
+.overlay { position: fixed; inset: 0; background: rgba(10, 10, 16, 0.6); z-index: 40; }
+.dialog-wrap { position: fixed; inset: 0; display: flex; align-items: flex-start; justify-content: center; z-index: 50; padding: 40px 16px; overflow-y: auto; }
+.dialog { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 12px; width: 560px; max-width: 100%; padding: 18px 20px; box-shadow: 0 12px 48px rgba(0,0,0,0.5); }
+.dialog.wide { width: 760px; }
+.dialog-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.dialog-title h2 { margin: 0; font-size: 17px; }
+.dialog-title .close { background: transparent; border: none; color: var(--ink-dim); font-size: 14px; cursor: pointer; }
+.dialog-body { display: grid; gap: 14px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.field { display: grid; gap: 4px; font-size: 12px; color: var(--ink-dim); }
+.field.wide { grid-column: 1 / -1; }
+.field.chk-field { grid-template-columns: 1fr auto; align-items: center; }
+.field input[type="number"], .field input[type="text"], .field input:not([type]), .field select { width: 100%; box-sizing: border-box; }
+.sidebar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.adv-toggle { background: transparent; border: none; color: var(--amber); font-size: 12px; cursor: pointer; padding: 6px 0; }
+.recipe-sec { display: grid; gap: 8px; }
+.recipe-sec h3 { margin: 8px 0 0; font-size: 14px; }
+.preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.preset-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 6px; background: var(--bg-elev); }
+.preset-name { font-weight: 600; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.family-pill { font-size: 11px; color: var(--celadon); border: 1px solid var(--celadon); border-radius: 99px; padding: 1px 8px; white-space: nowrap; }
+.status-line { color: var(--amber); font-size: 12px; }

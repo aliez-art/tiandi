@@ -141,20 +141,73 @@ export interface Dataset {
   created_at: string
 }
 
-export interface CaptionEntry {
-  path: string
-  caption: string
-  has_file: boolean
-}
-
-export interface TagStat {
-  tag: string
-  count: number
-}
-
 export async function listDatasets(): Promise<Dataset[]> {
   const res = await fetch(`${base()}/api/datasets`)
   if (!res.ok) throw new Error(`datasets ${res.status}`)
+  return res.json()
+}
+
+export interface RecipeView {
+  id: string
+  name: string
+  family: string
+  data: Record<string, unknown>
+  created_at: string
+}
+
+export interface PresetView {
+  name: string
+  family: string
+  description: string
+  tags: string[]
+  data: Record<string, unknown>
+}
+
+export async function listRecipes(): Promise<RecipeView[]> {
+  const res = await fetch(`${base()}/api/recipes`)
+  if (!res.ok) throw new Error(`recipes ${res.status}`)
+  return res.json()
+}
+
+export async function listPresets(): Promise<PresetView[]> {
+  const res = await fetch(`${base()}/api/recipes/presets`)
+  if (!res.ok) throw new Error(`presets ${res.status}`)
+  return res.json()
+}
+
+export async function createRecipe(
+  name: string,
+  family: string,
+  data: Record<string, unknown>,
+): Promise<{ recipe: RecipeView; issues: unknown[] }> {
+  const res = await fetch(`${base()}/api/recipes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, family, data }),
+  })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(err?.error ?? `create recipe ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function deleteRecipe(id: string): Promise<void> {
+  const res = await fetch(`${base()}/api/recipes/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`delete recipe ${res.status}`)
+}
+
+export async function createRun(input: {
+  dataset_id: string | null
+  recipe_id: string | null
+  base_model_id: string | null
+}): Promise<Run> {
+  const res = await fetch(`${base()}/api/runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error(`create run ${res.status}`)
   return res.json()
 }
 
@@ -178,50 +231,6 @@ export async function scanDataset(
     body: JSON.stringify(opts ?? {}),
   })
   if (!res.ok) throw new Error(`scan dataset ${res.status}`)
-  return res.json()
-}
-
-export async function listCaptions(id: string): Promise<CaptionEntry[]> {
-  const res = await fetch(`${base()}/api/datasets/${id}/captions`)
-  if (!res.ok) throw new Error(`captions ${res.status}`)
-  return res.json()
-}
-
-export async function saveCaption(id: string, path: string, text: string): Promise<void> {
-  const res = await fetch(`${base()}/api/datasets/${id}/caption`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, text }),
-  })
-  if (!res.ok) throw new Error(`save caption ${res.status}`)
-}
-
-export async function batchReplaceCaptions(
-  id: string,
-  rules: { find: string; replace: string; regex?: boolean }[],
-): Promise<{ affected: number; total: number }> {
-  const res = await fetch(`${base()}/api/datasets/${id}/captions/batch`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rules }),
-  })
-  if (!res.ok) throw new Error(`batch replace ${res.status}`)
-  return res.json()
-}
-
-export async function tagStats(id: string): Promise<TagStat[]> {
-  const res = await fetch(`${base()}/api/datasets/${id}/tags`)
-  if (!res.ok) throw new Error(`tags ${res.status}`)
-  return res.json()
-}
-
-export async function runTagging(id: string, mode: string): Promise<{ mode: string; tagged: number }> {
-  const res = await fetch(`${base()}/api/datasets/${id}/tag`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mode }),
-  })
-  if (!res.ok) throw new Error(`tagging ${res.status}`)
   return res.json()
 }
 

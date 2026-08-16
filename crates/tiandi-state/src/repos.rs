@@ -280,8 +280,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn get_recipe(&self, id: &str) -> Result<Recipe, RepoError> {
-        let row = self
+    pub fn get_recipe(&self, id: &str) -> Result<Recipe, RepoError> {        let row = self
             .conn
             .query_row(
                 "SELECT id, name, family, data, created_at FROM recipes WHERE id = ?1",
@@ -348,6 +347,20 @@ impl Store {
             });
         }
         Ok(out)
+    }
+
+    /// 删除丹方（不存在则 NotFound）。
+    pub fn delete_recipe(&self, id: &str) -> Result<(), RepoError> {
+        let n = self
+            .conn
+            .execute("DELETE FROM recipes WHERE id = ?1", [id])?;
+        if n == 0 {
+            return Err(RepoError::NotFound {
+                entity: "recipe",
+                id: id.into(),
+            });
+        }
+        Ok(())
     }
 
     // ---- Run ----

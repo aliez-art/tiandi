@@ -1,7 +1,7 @@
 //! 丹方 API：库内 CRUD、校验（点火前拦截）、内置预设。
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -21,6 +21,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/recipes", get(list_recipes).post(create_recipe))
         .route("/api/recipes/presets", get(list_presets))
         .route("/api/recipes/validate", post(validate))
+        .route("/api/recipes/{id}", axum::routing::delete(delete_recipe))
 }
 
 // ---------- 列表 / 预设 ----------
@@ -80,6 +81,17 @@ async fn create_recipe(
     let store = state.store.lock().await;
     store.insert_recipe(&recipe)?;
     Ok((StatusCode::CREATED, Json(RecipeResponse { recipe, issues })))
+}
+
+// ---------- 删除 ----------
+
+async fn delete_recipe(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let store = state.store.lock().await;
+    store.delete_recipe(&id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- 校验（不落库） ----------

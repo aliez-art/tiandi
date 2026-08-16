@@ -60,7 +60,13 @@ pub fn build_router(state: AppState) -> Router {
         tower_http::services::ServeDir::new(&runs_dir).append_index_html_on_directories(false);
     let mut router = api::router(state)
         .layer(tower_http::cors::CorsLayer::permissive())
-        .nest_service("/runs", serve_runs.clone());
+        .nest_service("/runs", serve_runs.clone())
+        // 未知 /api/* 路径：404（不落入 SPA fallback）
+        .route(
+            "/api/{*rest}",
+            axum::routing::get(|| async { axum::http::StatusCode::NOT_FOUND })
+                .post(|| async { axum::http::StatusCode::NOT_FOUND }),
+        );
     match ui_dist_dir() {
         // 一键启动模式：服务 UI 构建产物（SPA fallback 到 index.html）
         Some(ui) => {

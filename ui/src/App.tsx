@@ -13,6 +13,7 @@ import {
 import Console, { type EventLine } from './components/Console'
 import DatasetView from './components/DatasetView'
 import SettingsView from './components/SettingsView'
+import { NewRunDialog, RecipeManager } from './components/TrainSetup'
 
 const STATE_LABEL: Record<string, string> = {
   created: '已创建',
@@ -36,6 +37,8 @@ export default function App() {
   const [events, setEvents] = useState<EventLine[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [showNewRun, setShowNewRun] = useState(false)
+  const [showRecipes, setShowRecipes] = useState(false)
   const eventSeq = useRef(0)
 
   // GPU 监控（3s 轮询）
@@ -182,8 +185,16 @@ export default function App() {
           <aside className="sidebar">
             <div className="panel-title">
               <h2>炼丹任务</h2>
-              <button onClick={onFire} disabled={busy || connecting} title="创建模拟炼丹任务">
-                {busy ? '点火中…' : '点火'}
+              <button onClick={onFire} disabled={busy || connecting} title="创建模拟炼丹任务（演示）">
+                {busy ? '点火中…' : '模拟'}
+              </button>
+            </div>
+            <div className="sidebar-actions">
+              <button onClick={() => setShowNewRun(true)} disabled={connecting} className="primary">
+                新建炼丹
+              </button>
+              <button onClick={() => setShowRecipes(true)} disabled={connecting} className="secondary">
+                丹方
               </button>
             </div>
             {runs.length === 0 ? (
@@ -231,6 +242,16 @@ export default function App() {
       )}
 
       <footer>本地服务 127.0.0.1 · 仅绑定本机</footer>
+      {showNewRun && (
+        <NewRunDialog
+          onClose={() => setShowNewRun(false)}
+          onCreated={(runId) => {
+            setSelected(runId)
+            void refreshRuns()
+          }}
+        />
+      )}
+      {showRecipes && <RecipeManager onClose={() => setShowRecipes(false)} />}
     </div>
   )
 }

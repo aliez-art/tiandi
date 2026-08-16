@@ -145,6 +145,16 @@ def scan_samples(sample_dir: str, seen: set, run_id: str) -> None:
 
 # ---------------------------------------------------------------- sd-scripts 模式
 
+def _kernel_env() -> dict:
+    """子进程环境：强制 UTF-8 输出（sd-scripts 在中文 Windows 上默认按 GBK 打印
+    日文/中文消息，按 UTF-8 读取会乱码；PYTHONIOENCODING/PYTHONUTF8 使其输出
+    UTF-8，与下方 encoding="utf-8" 读取一致）。"""
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def run_sdscripts(config_path: str) -> None:
     """启动 accelerate launch <train_script> --config_file <toml>，解析 kohya 进度行。"""
     train_script = os.environ.get("TIANDI_TRAIN_SCRIPT", "sdxl_train_network.py")
@@ -163,6 +173,7 @@ def run_sdscripts(config_path: str) -> None:
             bufsize=1,
             encoding="utf-8",
             errors="replace",
+            env=_kernel_env(),
             # 关键：训练子进程不继承控制管道（Rust 侧 stdin 保持打开时，
             # 脚本内任何 stdin 读取都会永久阻塞；DEVNULL 保证读到 EOF）
             stdin=subprocess.DEVNULL,
@@ -209,6 +220,10 @@ def run_sdscripts(config_path: str) -> None:
             tail_buf.append(line)
             if len(tail_buf) > 50:
                 tail_buf.pop(0)
+            # 同时以 log 事件上报（UI 日志流/落盘可见；tqdm 行也会进缓冲，
+            # 由 Rust 侧环形缓冲裁剪，保证训练日志可排查）
+            if line.strip():
+                log(line)
             progress = parse_kohya_progress(line)
             if progress:
                 run_id = os.environ.get("TIANDI_RUN_ID", "")
@@ -320,6 +335,7 @@ def run_aitk(config_path: str) -> None:
             bufsize=1,
             encoding="utf-8",
             errors="replace",
+            env=_kernel_env(),
             stdin=subprocess.DEVNULL,
         )
     except FileNotFoundError:
@@ -360,6 +376,9 @@ def run_aitk(config_path: str) -> None:
             tail_buf.append(line)
             if len(tail_buf) > 50:
                 tail_buf.pop(0)
+            # 原始行以 log 事件上报（UI 日志流/落盘可见）
+            if line.strip():
+                log(line)
             progress = parse_aitk_progress(line)
             if progress:
                 run_id = os.environ.get("TIANDI_RUN_ID", "")

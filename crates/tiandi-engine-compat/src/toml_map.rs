@@ -127,10 +127,14 @@ pub fn build_sdscripts_toml(
         "lr_scheduler = \"{}\"\n",
         recipe.lr_scheduler.label()
     ));
-    t.push_str(&format!(
-        "lr_warmup_steps = {}\n",
-        lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
-    ));
+    // warmup 仅对需要它的调度器有效：constant 等调度器输出后会直接报错
+    // （sd-scripts: "SchedulerType.CONSTANT does not require num_warmup_steps"）
+    if recipe.lr_scheduler != tiandi_recipe::SchedulerKind::Constant {
+        t.push_str(&format!(
+            "lr_warmup_steps = {}\n",
+            lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
+        ));
+    }
     t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
     t.push_str(&format!("seed = {}\n", recipe.seed));
     t.push_str(&format!(
@@ -209,10 +213,13 @@ pub fn build_sdscripts_toml(
             t.push_str(&format!("save_last_n_states = {n}\n"));
         }
     }
-    t.push_str(&format!(
-        "sample_every_n_epochs = {}\n",
-        recipe.sample_every_n_epochs
-    ));
+    // 0 或未启用时不输出（sd-scripts 对 sample_every_n_epochs<=0 会打警告）
+    if recipe.sample_every_n_epochs > 0 {
+        t.push_str(&format!(
+            "sample_every_n_epochs = {}\n",
+            recipe.sample_every_n_epochs
+        ));
+    }
     if let Some(v) = recipe.max_train_steps {
         t.push_str(&format!("max_train_steps = {v}\n"));
     }
@@ -394,10 +401,14 @@ pub fn build_sdscripts_toml_full(
         "lr_scheduler = \"{}\"\n",
         recipe.lr_scheduler.label()
     ));
-    t.push_str(&format!(
-        "lr_warmup_steps = {}\n",
-        lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
-    ));
+    // warmup 仅对需要它的调度器有效：constant 等调度器输出后会直接报错
+    // （sd-scripts: "SchedulerType.CONSTANT does not require num_warmup_steps"）
+    if recipe.lr_scheduler != tiandi_recipe::SchedulerKind::Constant {
+        t.push_str(&format!(
+            "lr_warmup_steps = {}\n",
+            lr_warmup_steps(recipe, dataset_image_count(&paths.dataset_dir))
+        ));
+    }
     t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
     t.push_str(&format!("seed = {}\n", recipe.seed));
     t.push_str(&format!(

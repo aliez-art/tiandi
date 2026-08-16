@@ -581,6 +581,9 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       if (path) {
         const imported = await importAsset('base_model', path)
         setModelPath(imported)
+        // 已注册模型 → 同步丹方族（避免 sdxl1 丹方配 anima 底模之类的族错配）
+        const known = models.find((m) => m.path === imported || m.path === path)
+        if (known) setFamily(known.family)
         showMsg(`已选底模：${imported}`)
       } else {
         showMsg('未选择文件（已取消）')

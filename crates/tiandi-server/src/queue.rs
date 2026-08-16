@@ -91,6 +91,12 @@ pub async fn build_job(
         let ds = store.get_dataset(did).map_err(|e| e.to_string())?;
         dataset_dir = ds.dir;
     }
+    // 适配"直接含图目录"：sd-scripts 的 train_data_dir 要求"父目录包含图片子文件夹"
+    // （DreamBooth 布局）。若用户选择的目录直接包含图片（无含图子文件夹），
+    // 生成训练镜像 `<runs>/<run_id>/dataset/1_data/`（硬链接原图与同名 .txt），
+    // 让两种目录结构都能训练（图片仍在用户目录，不移动/不复制大文件）。
+    let runs_dir = state.trainer.runs_dir();
+    dataset_dir = prepare_dataset_dir(&dataset_dir, &run.id, runs_dir);
     if let Some(mid) = &base_model_id {
         let store = state.store.lock().await;
         let m = store.get_base_model(mid).map_err(|e| e.to_string())?;
@@ -235,6 +241,82 @@ async fn recover_interrupted(state: &AppState) {
     }
 }
 
+/// sd-scripts 的 `train_data_dir` 要求"父目录包含图片子文件夹"（DreamBooth 布局）。
+/// 用户选择的目录若**直接包含图片**（无含图子文件夹），生成训练镜像：
+/// `<runs>/<run_id>/dataset/1_data/`（硬链接原图与同名 .txt；跨卷回退复制），
+/// 返回镜像路径供内核使用；子文件夹含图或目录不可用时原样返回。
+fn prepare_dataset_dir(dataset_dir: &str, run_id: &str, runs_dir: &std::path::Path) -> String {
+    const IMAGE_EXTS: [&str; 5] = [".jpg", ".jpeg", ".png", ".webp", ".bmp"];
+    let src = std::path::Path::new(dataset_dir);
+    if !src.is_dir() {
+        return dataset_dir.to_string(); // 目录缺失：交给内核报错，语义清晰
+    }
+
+    let is_image = |name: &std::ffi::OsStr| -> bool {
+        let lower = name.to_string_lossy().to_lowercase();
+        IMAGE_EXTS.iter().any(|e| lower.ends_with(e))
+    };
+    let dir_contains_images = |d: &std::path::Path| -> bool {
+        std::fs::read_dir(d)
+            .map(|it| it.flatten().any(|e| e.path().is_file() && is_image(&e.file_name())))
+            .unwrap_or(false)
+    };
+    // 有含图子文件夹 → 标准 DreamBooth 布局，直接用原目录
+    let has_nested_images = std::fs::read_dir(src)
+        .map(|it| {
+            it.flatten().any(|e| e.path().is_dir() && dir_contains_images(&e.path()))
+        })
+        .unwrap_or(false);
+    if has_nested_images || !dir_contains_images(src) {
+        return dataset_dir.to_string();
+    }
+
+    // 直接含图：生成镜像结构
+    // 注意：sd-scripts 的 train_data_dir 必须是"含图子文件夹的父目录"，
+    // 所以镜像根 = runs/<id>/dataset，图片放其子文件夹 1_data/，返回镜像根。
+    let target_root = runs_dir.join(run_id).join("dataset");
+    let target = target_root.join("1_data");
+    if !target.join("01.png").exists() && !target.join("01.jpg").exists() {
+        let _ = std::fs::create_dir_all(&target);
+        let entries = std::fs::read_dir(src)
+            .map(|it| it.flatten().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for entry in entries {
+            let path = entry.path();
+            let name = entry.file_name();
+            if !path.is_file() {
+                continue;
+            }
+            // 图片 + 同名 .txt（caption）一起纳入；其余文件忽略
+            let is_txt_of_image = {
+                let s = name.to_string_lossy();
+                let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or("");
+                s.ends_with(".txt")
+                    && std::fs::read_dir(src)
+                        .map(|it| {
+                            it.flatten().any(|e| {
+                                e.path().is_file()
+                                    && e.path().file_stem().and_then(|x| x.to_str()) == Some(stem)
+                                    && is_image(&e.file_name())
+                            })
+                        })
+                        .unwrap_or(false)
+            };
+            if !(is_image(&name) || is_txt_of_image) {
+                continue;
+            }
+            let dst = target.join(&name);
+            if dst.exists() {
+                continue;
+            }
+            if std::fs::hard_link(&path, &dst).is_err() {
+                let _ = std::fs::copy(&path, &dst); // 跨卷回退复制
+            }
+        }
+    }
+    target_root.to_string_lossy().into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,4 +433,49 @@ mod tests {
         std::fs::create_dir_all(run_dir.join("checkpoints")).unwrap();
         assert!(detect_resume_dir(&run_dir).is_none());
     }
+
+    #[test]
+    fn prepare_dataset_dir_mirrors_flat_image_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flat = tmp.path().join("我的图片");
+        std::fs::create_dir_all(&flat).unwrap();
+        std::fs::write(flat.join("01.png"), b"png").unwrap();
+        std::fs::write(flat.join("01.txt"), b"1girl").unwrap();
+        std::fs::write(flat.join("notes.md"), b"x").unwrap(); // 非图片忽略
+        let runs = tmp.path().join("runs");
+        let out = super::prepare_dataset_dir(
+            flat.to_str().unwrap(),
+            "run-1",
+            &runs,
+        );
+        // 镜像结构：train_data_dir = runs/run-1/dataset（父目录），
+        // 图片在子文件夹 1_data/ 内（sd-scripts DreamBooth 布局）
+        assert!(std::path::Path::new(&out).join("1_data/01.png").is_file());
+        assert!(std::path::Path::new(&out).join("1_data/01.txt").is_file());
+        assert!(!std::path::Path::new(&out).join("1_data/notes.md").exists());
+        // 幂等：再次调用不报错且内容一致
+        let out2 = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-1", &runs);
+        assert_eq!(out, out2);
+    }
+
+    #[test]
+    fn prepare_dataset_dir_keeps_nested_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("ds");
+        let group = nested.join("10_cat");
+        std::fs::create_dir_all(&group).unwrap();
+        std::fs::write(group.join("a.png"), b"png").unwrap();
+        let runs = tmp.path().join("runs");
+        let out = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-2", &runs);
+        // 子文件夹含图 → 原目录直接返回，不生成镜像
+        assert_eq!(out, nested.to_str().unwrap());
+        assert!(!runs.join("run-2").exists());
+    }
+
+    #[test]
+    fn prepare_dataset_dir_missing_dir_passthrough() {
+        let out = super::prepare_dataset_dir("Z:\\不存在的目录", "run-3", &std::path::PathBuf::from("Z:\\x"));
+        assert_eq!(out, "Z:\\不存在的目录");
+    }
 }
+

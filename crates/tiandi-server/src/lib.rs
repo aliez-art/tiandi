@@ -49,6 +49,10 @@ impl AppState {
         wrapper: PathBuf,
         demo: bool,
     ) -> Self {
+        // Windows canonicalize 会返回 `\\?\` 前缀（verbatim 路径）；该前缀经
+        // `replace('\\', "/")` 后会变成 `//?/D:/...`，Python/Python 内核无法解析，
+        // 统一在此剥掉（普通路径不受影响；磁盘路径无需 verbatim 形式）。
+        let runs_dir = strip_verbatim_prefix(runs_dir);
         let trainer = Arc::new(SdScriptsTrainer::new(bus.clone(), runs_dir, wrapper));
         Self {
             store: Arc::new(Mutex::new(store)),
@@ -57,6 +61,18 @@ impl AppState {
             demo,
         }
     }
+}
+
+/// 去掉 Windows verbatim 前缀 `\\?\`（含 UNC 变体 `\\?\UNC\` → `\\`）。
+pub fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    p
 }
 
 /// 构建完整路由。

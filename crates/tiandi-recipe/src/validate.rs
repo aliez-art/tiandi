@@ -250,6 +250,100 @@ pub fn validate_recipe(family: ModelFamily, data: &RecipeData) -> Vec<RecipeIssu
             );
         }
     }
+    // ---- 数据集扩展（lora-scripts-next 参数面） ----
+    if let Some(v) = data.caption_tag_dropout_rate {
+        if !(0.0..=1.0).contains(&v) {
+            issue(
+                IssueLevel::Error,
+                "caption_tag_dropout_rate",
+                format!("caption_tag_dropout_rate {v} 超出范围 [0, 1]"),
+            );
+        }
+    }
+    if let Some(v) = data.prior_loss_weight {
+        if v <= 0.0 {
+            issue(
+                IssueLevel::Error,
+                "prior_loss_weight",
+                format!("prior_loss_weight {v} 必须 > 0"),
+            );
+        }
+    }
+    if let (Some(min), Some(max)) = (data.min_bucket_reso, data.max_bucket_reso) {
+        if min >= max {
+            issue(
+                IssueLevel::Error,
+                "min_bucket_reso",
+                format!("min_bucket_reso {min} 必须小于 max_bucket_reso {max}"),
+            );
+        }
+    }
+    for (k, v) in [
+        ("min_bucket_reso", data.min_bucket_reso),
+        ("max_bucket_reso", data.max_bucket_reso),
+        ("bucket_reso_steps", data.bucket_reso_steps),
+    ] {
+        if let Some(v) = v {
+            if v == 0 || v > 4096 {
+                issue(IssueLevel::Error, k, format!("{k} {v} 超出范围 [1, 4096]"));
+            }
+        }
+    }
+    // weighted_captions 与 shuffle_caption 不推荐同开（sd-scripts 规则）
+    if data.weighted_captions == Some(true) && data.shuffle_caption {
+        issue(
+            IssueLevel::Warning,
+            "weighted_captions",
+            "加权 tag 与随机打乱 tag 不推荐同开（打乱会破坏加权语法）".into(),
+        );
+    }
+    // ---- 网络扩展 ----
+    if let Some(v) = data.scale_weight_norms {
+        if v <= 0.0 {
+            issue(
+                IssueLevel::Error,
+                "scale_weight_norms",
+                format!("scale_weight_norms {v} 必须 > 0"),
+            );
+        }
+    }
+    // ---- 优化扩展 ----
+    if let Some(v) = &data.loss_type {
+        if !["l1", "l2", "huber", "smooth_l1"].contains(&v.as_str()) {
+            issue(
+                IssueLevel::Error,
+                "loss_type",
+                format!("loss_type {v} 非法（可选 l1/l2/huber/smooth_l1）"),
+            );
+        }
+    }
+    if let Some(v) = data.lr_scheduler_num_cycles {
+        if v == 0 {
+            issue(
+                IssueLevel::Error,
+                "lr_scheduler_num_cycles",
+                "lr_scheduler_num_cycles 必须 ≥ 1".into(),
+            );
+        }
+    }
+    // ---- 保存扩展 ----
+    if let Some(v) = &data.save_precision {
+        if !["fp16", "float", "bf16"].contains(&v.as_str()) {
+            issue(
+                IssueLevel::Error,
+                "save_precision",
+                format!("save_precision {v} 非法（可选 fp16/float/bf16）"),
+            );
+        }
+    }
+    // ---- 精度互斥 ----
+    if data.full_fp16 == Some(true) && data.full_bf16 == Some(true) {
+        issue(
+            IssueLevel::Error,
+            "full_fp16",
+            "full_fp16 与 full_bf16 不能同时开启".into(),
+        );
+    }
 
     // ---- 调度 ----
     if !(0.0..=0.5).contains(&data.lr_warmup_ratio) {

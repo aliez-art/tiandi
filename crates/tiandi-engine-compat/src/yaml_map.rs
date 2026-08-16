@@ -7,6 +7,15 @@
 //! - 文本编码器 Qwen3-VL-4B（model_kwargs.text_encoder_path，本地目录格式）
 //! - VAE = Qwen-Image（model_kwargs.vae_path，指向含 vae/ 子目录的父目录）
 //! - 16GB 显存：quantize(qfloat8) + quantize_te + low_vram + unload_text_encoder
+//!
+//! 注意：tiandi-recipe 新增的数据集/网络/优化/保存扩展字段（reg_data_dir、
+//! prior_loss_weight、min_bucket_reso/max_bucket_reso、bucket_*、weighted_captions、
+//! caption_dropout_*、network_weights、scale_weight_norms、network_args_custom、
+//! loss_type、lr_scheduler_num_cycles、optimizer_args_custom、save_precision、
+//! save_last_n_epochs_state、full_fp16/full_bf16、no_half_vae、xformers、lowram、
+//! persistent_data_loader_workers、vae_batch_size）均为 sd-scripts（kohya）专用键，
+//! Krea 2 / ai-toolkit 无对应概念，此处不映射；如需新增请先核实 ai-toolkit
+//! config_modules.py 是否存在对应键。
 
 use tiandi_recipe::OptimizerKind;
 use tiandi_recipe::RecipeData;

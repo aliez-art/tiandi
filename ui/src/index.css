@@ -351,6 +351,34 @@ textarea {
 .form-sec h4 { margin: 0 0 8px; font-size: 13px; color: var(--amber); letter-spacing: 1px; }
 .dialog .field textarea { width: 100%; box-sizing: border-box; resize: vertical; background: var(--bg-elev); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
 
+/* 折叠卡片分区（lora-scripts-next 风格：标题行按钮 + 可折叠内容区） */
+.form-sec-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.form-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--amber);
+  font-size: 13px;
+  letter-spacing: 1px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+}
+.form-sec-title:hover { background: rgba(212, 162, 78, 0.08); filter: none; }
+.form-sec-caret { color: var(--amber); font-size: 12px; flex-shrink: 0; }
+.form-sec-body { padding: 12px 14px 14px; border-top: 1px solid var(--line); }
+
 /* 扁平操作条（炼丹页顶部） */
 .firebar-wrap { grid-column: 1 / -1; }
 .firebar { padding: 10px 14px; display: grid; gap: 6px; }

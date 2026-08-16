@@ -177,6 +177,59 @@ pub struct RecipeData {
     pub shuffle_caption: bool,
     pub keep_tokens: u32,
     pub caption_dropout_rate: Option<f64>,
+    // ---- 数据集扩展（参考 lora-scripts-next 参数面）----
+    /// 正则化数据集目录（防过拟合；默认不使用）
+    pub reg_data_dir: Option<String>,
+    /// 正则化先验损失权重（默认 1.0）
+    pub prior_loss_weight: Option<f64>,
+    /// arb 桶最小分辨率（默认 256）
+    pub min_bucket_reso: Option<u32>,
+    /// arb 桶最大分辨率（默认 1024）
+    pub max_bucket_reso: Option<u32>,
+    /// arb 桶分辨率划分单位（默认 64；SDXL 可用 32）
+    pub bucket_reso_steps: Option<u32>,
+    /// arb 桶不放大图片（默认 true）
+    pub bucket_no_upscale: Option<bool>,
+    /// 使用带权重的 tag（`(tag:1.2)` 语法；与 shuffle_caption 不推荐同开）
+    pub weighted_captions: Option<bool>,
+    /// 每 N 轮丢弃全部标签
+    pub caption_dropout_every_n_epochs: Option<u32>,
+    /// 按逗号标签随机丢弃的概率
+    pub caption_tag_dropout_rate: Option<f64>,
+    // ---- 网络扩展（参考 lora-scripts-next 参数面）----
+    /// 从已有 LoRA 继续训练（网络权重路径）
+    pub network_weights: Option<String>,
+    /// 最大范数正则化（推荐 1.0）
+    pub scale_weight_norms: Option<f64>,
+    /// 自定义 network_args（一行一个）
+    pub network_args_custom: Vec<String>,
+    // ---- 优化扩展 ----
+    /// 损失函数类型（l1/l2/huber/smooth_l1）
+    pub loss_type: Option<String>,
+    /// 调度器重启次数（cosine_with_restarts 用）
+    pub lr_scheduler_num_cycles: Option<u32>,
+    /// 自定义 optimizer_args（一行一个）
+    pub optimizer_args_custom: Vec<String>,
+    // ---- 保存扩展 ----
+    /// 模型保存精度（fp16/float/bf16）
+    pub save_precision: Option<String>,
+    /// 仅保留最近 N 轮的训练状态
+    pub save_last_n_epochs_state: Option<u32>,
+    // ---- 精度/显存扩展 ----
+    /// 完全使用 FP16 精度
+    pub full_fp16: Option<bool>,
+    /// 完全使用 BF16 精度
+    pub full_bf16: Option<bool>,
+    /// 不使用半精度 VAE
+    pub no_half_vae: Option<bool>,
+    /// 启用 xformers 注意力
+    pub xformers: Option<bool>,
+    /// 低显存模式（U-Net/TE/VAE 分段加载）
+    pub lowram: Option<bool>,
+    /// 保留数据加载 worker（减少 epoch 间停顿）
+    pub persistent_data_loader_workers: Option<bool>,
+    /// VAE 编码批量大小
+    pub vae_batch_size: Option<u32>,
     // ---- 保存与采样 ----
     pub save_every_n_epochs: u32,
     pub sample_every_n_epochs: u32,
@@ -312,6 +365,30 @@ impl Default for RecipeData {
             te_path: None,
             dataset_dir: None,
             full_finetune: None,
+            reg_data_dir: None,
+            prior_loss_weight: None,
+            min_bucket_reso: None,
+            max_bucket_reso: None,
+            bucket_reso_steps: None,
+            bucket_no_upscale: None,
+            weighted_captions: None,
+            caption_dropout_every_n_epochs: None,
+            caption_tag_dropout_rate: None,
+            network_weights: None,
+            scale_weight_norms: None,
+            network_args_custom: vec![],
+            loss_type: None,
+            lr_scheduler_num_cycles: None,
+            optimizer_args_custom: vec![],
+            save_precision: None,
+            save_last_n_epochs_state: None,
+            full_fp16: None,
+            full_bf16: None,
+            no_half_vae: None,
+            xformers: None,
+            lowram: None,
+            persistent_data_loader_workers: None,
+            vae_batch_size: None,
         }
     }
 }

@@ -77,10 +77,10 @@ type FieldDef = {
   sdxlOnly?: boolean
 }
 
-/** 训练参数表单：按用途分组、每组内按使用频率排序；悬停 "?" 查看说明。 */
+/** 训练参数表单：分区卡片式（lora-scripts-next 风格），每组内按使用频率排序；悬停 "?" 查看说明。 */
 const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
   {
-    title: '数据与概念',
+    title: '训练用模型',
     fields: [
       {
         key: 'trigger_word',
@@ -96,6 +96,11 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'select',
         options: PREDICTIONS,
       },
+    ],
+  },
+  {
+    title: '数据集设置',
+    fields: [
       {
         key: 'resolution',
         label: '分辨率',
@@ -110,11 +115,52 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'bool',
       },
       {
+        key: 'min_bucket_reso',
+        label: '分桶最小分辨率',
+        hint: '分桶边长的下限（小图不低于该值缩放）。',
+        placeholder: '256',
+        kind: 'num',
+      },
+      {
+        key: 'max_bucket_reso',
+        label: '分桶最大分辨率',
+        hint: '分桶边长的上限（防止超大图爆显存）。',
+        placeholder: '1024',
+        kind: 'num',
+      },
+      {
+        key: 'bucket_reso_steps',
+        label: '分桶步长',
+        hint: '分桶分辨率的递增步长（64 即按 64 的倍数切分）。',
+        placeholder: '64',
+        kind: 'num',
+      },
+      {
+        key: 'bucket_no_upscale',
+        label: '分桶不放大',
+        hint: '禁止把小图放大到目标桶分辨率（避免模糊放大）。',
+        kind: 'bool',
+      },
+      {
         key: 'batch_size',
         label: '批大小',
         hint: '1 通常足够；>1 需更大显存。',
         placeholder: '1',
         kind: 'num',
+      },
+      {
+        key: 'reg_data_dir',
+        label: '正则化数据集（可选）',
+        hint: '防过拟合的辅助图片集（与训练集同主题、不带描述标签的图），用于正则化。',
+        kind: 'text',
+      },
+      {
+        key: 'prior_loss_weight',
+        label: '正则化损失权重',
+        hint: '正则化图片的损失权重（1.0 = 与训练图相同；调低可减少正则化影响）。',
+        placeholder: '1.0',
+        kind: 'num',
+        step: 'any',
       },
       {
         key: 'keep_tokens',
@@ -130,6 +176,12 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'bool',
       },
       {
+        key: 'weighted_captions',
+        label: '加权标签',
+        hint: '支持 (tag:1.2) 形式的加权标签；与随机打乱标签不推荐同开。',
+        kind: 'bool',
+      },
+      {
         key: 'caption_dropout_rate',
         label: '标签丢弃率',
         hint: '随机丢弃描述的比例（0.05 常规；0 = 从不丢弃）。',
@@ -137,10 +189,25 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'num',
         step: 'any',
       },
+      {
+        key: 'caption_dropout_every_n_epochs',
+        label: '标签丢弃间隔（轮）',
+        hint: '每 N 轮整批丢弃一次描述标签（0 = 关闭）。',
+        placeholder: '0',
+        kind: 'num',
+      },
+      {
+        key: 'caption_tag_dropout_rate',
+        label: '标签词丢弃率',
+        hint: '随机丢弃单个标签词的比例（0.0 = 关闭）。',
+        placeholder: '0.0',
+        kind: 'num',
+        step: 'any',
+      },
     ],
   },
   {
-    title: '网络结构',
+    title: '网络设置',
     fields: [
       {
         key: 'network_type',
@@ -202,6 +269,28 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         step: 'any',
       },
       {
+        key: 'network_weights',
+        label: '预训练权重',
+        hint: '从已训练的 LoRA 权重继续训练（.safetensors）；留空 = 从头训练。',
+        placeholder: '留空 = 从头训练',
+        kind: 'text',
+      },
+      {
+        key: 'scale_weight_norms',
+        label: '权重范数缩放',
+        hint: '按范数归一化 LoRA 权重（1.0 关闭；>0 可提升训练稳定性）。',
+        placeholder: '1.0',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'network_args_custom',
+        label: '网络自定义参数',
+        hint: '透传给网络的额外参数，每行一个 k=v（如 conv_group_size=4）。',
+        placeholder: '每行一个 k=v',
+        kind: 'textlist',
+      },
+      {
         key: 'block_weights',
         label: 'Block 权重（SDXL）',
         hint: '25 个逗号分隔值（0/1），强化 UNet 指定层，如 0,...,1,1,1,1,1,...,1。仅 SDXL 族。',
@@ -212,7 +301,7 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     ],
   },
   {
-    title: '优化器与学习率',
+    title: '学习率与优化器',
     fields: [
       {
         key: 'optimizer',
@@ -230,18 +319,18 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         step: 'any',
       },
       {
-        key: 'text_encoder_lr',
-        label: '文本编码器学习率',
-        hint: 'TE 学习率；留空 = 跟随主学习率；缓存 TE 输出时自动为 0（SDXL 常用 5e-5）。',
-        placeholder: '0.00005',
-        kind: 'num',
-        step: 'any',
-      },
-      {
         key: 'unet_lr',
         label: 'UNet 学习率',
         hint: '仅 UNet 的学习率；留空 = 跟随主学习率。',
         placeholder: '0.0001',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'text_encoder_lr',
+        label: '文本编码器学习率',
+        hint: 'TE 学习率；留空 = 跟随主学习率；缓存 TE 输出时自动为 0（SDXL 常用 5e-5）。',
+        placeholder: '0.00005',
         kind: 'num',
         step: 'any',
       },
@@ -260,10 +349,37 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'num',
         step: 'any',
       },
+      {
+        key: 'lr_scheduler_num_cycles',
+        label: '调度循环数',
+        hint: 'cosine_with_restarts 的循环次数（1 = 不重启）。',
+        placeholder: '1',
+        kind: 'num',
+      },
+      {
+        key: 'loss_type',
+        label: '损失类型',
+        hint: '训练损失函数：L2 常规；L1 更稳；Huber/Smooth L1 介于两者之间。',
+        kind: 'select',
+        options: [
+          ['', '自动（默认）'],
+          ['l1', 'L1'],
+          ['l2', 'L2'],
+          ['huber', 'Huber'],
+          ['smooth_l1', 'Smooth L1'],
+        ],
+      },
+      {
+        key: 'optimizer_args_custom',
+        label: '优化器自定义参数',
+        hint: '透传给优化器的额外参数，每行一个 k=v（如 weight_decay=0.01）。',
+        placeholder: '每行一个 k=v',
+        kind: 'textlist',
+      },
     ],
   },
   {
-    title: '训练控制',
+    title: '训练相关参数',
     fields: [
       {
         key: 'train_text_encoder',
@@ -344,8 +460,45 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     ],
   },
   {
-    title: '缓存与精度',
+    title: '精度与缓存',
     fields: [
+      {
+        key: 'mixed_precision',
+        label: '混合精度',
+        hint: 'bf16 常规；老显卡用 fp16。',
+        kind: 'select',
+        options: PRECISIONS,
+      },
+      {
+        key: 'full_fp16',
+        label: '全程 fp16',
+        hint: '整个训练流程使用 fp16（省显存；混合精度异常/老显卡时用）。',
+        kind: 'bool',
+      },
+      {
+        key: 'full_bf16',
+        label: '全程 bf16',
+        hint: '整个训练流程使用 bf16（Ampere+ 显卡推荐，更稳）。',
+        kind: 'bool',
+      },
+      {
+        key: 'no_half_vae',
+        label: 'VAE 不降精度',
+        hint: 'VAE 保持全精度（避免半精度下 VAE 输出异常）。',
+        kind: 'bool',
+      },
+      {
+        key: 'xformers',
+        label: 'xformers',
+        hint: '启用 xformers 注意力加速（省显存提速；部分环境需安装）。',
+        kind: 'bool',
+      },
+      {
+        key: 'lowram',
+        label: '低显存模式',
+        hint: '低显存模式：权重驻留 CPU、按需搬运（更慢更省显存）。',
+        kind: 'bool',
+      },
       {
         key: 'cache_latents',
         label: '缓存 latent',
@@ -365,11 +518,121 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'bool',
       },
       {
-        key: 'mixed_precision',
-        label: '混合精度',
-        hint: 'bf16 常规；老显卡用 fp16。',
+        key: 'persistent_data_loader_workers',
+        label: '常驻数据加载线程',
+        hint: '保持 DataLoader 工作线程常驻（省去每轮重启开销）。',
+        kind: 'bool',
+      },
+      {
+        key: 'vae_batch_size',
+        label: 'VAE 批大小',
+        hint: 'VAE 编码的批大小；留空 = 自动。',
+        placeholder: '留空 = 自动',
+        kind: 'num',
+      },
+    ],
+  },
+  {
+    title: '保存设置',
+    fields: [
+      {
+        key: 'save_every_n_epochs',
+        label: '保存间隔（轮）',
+        hint: '每 N 轮存一个 LoRA 检查点（断点续训也依赖它）。',
+        placeholder: '1',
+        kind: 'num',
+      },
+      {
+        key: 'save_every_n_steps',
+        label: '保存间隔（步）',
+        hint: '每 N 步存一个检查点；留空 = 按轮保存。',
+        placeholder: '留空 = 按轮保存',
+        kind: 'num',
+      },
+      {
+        key: 'save_state',
+        label: '保存优化器状态',
+        hint: '额外保存优化器状态（断点续训更完整，文件更大）。',
+        kind: 'bool',
+      },
+      {
+        key: 'save_last_n_states',
+        label: '保留最近状态数',
+        hint: '最多保留几个状态目录（防磁盘膨胀）。',
+        placeholder: '3',
+        kind: 'num',
+      },
+      {
+        key: 'save_last_n_epochs_state',
+        label: '保留最近轮状态数',
+        hint: '最多保留最近 N 轮的优化器状态；留空 = 全部保留。',
+        placeholder: '留空 = 全部保留',
+        kind: 'num',
+      },
+      {
+        key: 'save_precision',
+        label: '保存精度',
+        hint: '检查点的保存精度：fp16 常规（文件小）；float 全精度更通用；bf16 更稳。',
         kind: 'select',
-        options: PRECISIONS,
+        options: [
+          ['fp16', 'fp16'],
+          ['float', 'float（fp32）'],
+          ['bf16', 'bf16'],
+        ],
+      },
+    ],
+  },
+  {
+    title: '预览图设置',
+    fields: [
+      {
+        key: 'sample_enabled',
+        label: '训练中生成示例图',
+        hint: '训练过程中按轮生成预览图（在训练控制台画廊展示）。关闭则跳过采样、训练更快。',
+        kind: 'bool',
+      },
+      {
+        key: 'sample_every_n_epochs',
+        label: '示例图间隔（轮）',
+        hint: '每 N 轮生成一批示例图（0 = 不生成）。训练过程可视化，强烈建议开启。',
+        placeholder: '1',
+        kind: 'num',
+      },
+      {
+        key: 'sample_prompts',
+        label: '示例图提示词',
+        hint: '每行一个提示词；可含触发词。训练到每轮时按此出图。',
+        placeholder: '每行一个提示词',
+        kind: 'textlist',
+      },
+      {
+        key: 'sample_steps',
+        label: '示例图步数',
+        hint: '生成示例图用的去噪步数（20~30 常见；越高越精细越慢）。',
+        placeholder: '24',
+        kind: 'num',
+      },
+      {
+        key: 'guidance_scale',
+        label: '示例图引导强度',
+        hint: 'CFG 强度（4~7 常见；越高越贴提示词）。',
+        placeholder: '5.0',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'negative_prompt',
+        label: '示例图负向提示词',
+        hint: '示例图的负向提示词（如 lowres, bad anatomy）。',
+        placeholder: 'lowres, bad anatomy',
+        kind: 'text',
+      },
+      {
+        key: 'sample_sampler',
+        label: '示例图采样器',
+        hint: 'euler_a 常用；示例图生成的扩散采样器。',
+        placeholder: 'euler_a',
+        kind: 'text',
       },
     ],
   },
@@ -417,87 +680,6 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
       },
     ],
   },
-  {
-    title: '保存与采样（每轮示例图）',
-    fields: [
-      {
-        key: 'sample_enabled',
-        label: '训练中生成示例图',
-        hint: '训练过程中按轮生成预览图（在训练控制台画廊展示）。关闭则跳过采样、训练更快。',
-        kind: 'bool',
-      },
-      {
-        key: 'save_every_n_epochs',
-        label: '保存间隔（轮）',
-        hint: '每 N 轮存一个 LoRA 检查点（断点续训也依赖它）。',
-        placeholder: '1',
-        kind: 'num',
-      },
-      {
-        key: 'save_every_n_steps',
-        label: '保存间隔（步）',
-        hint: '每 N 步存一个检查点；留空 = 按轮保存。',
-        placeholder: '留空 = 按轮保存',
-        kind: 'num',
-      },
-      {
-        key: 'save_state',
-        label: '保存优化器状态',
-        hint: '额外保存优化器状态（断点续训更完整，文件更大）。',
-        kind: 'bool',
-      },
-      {
-        key: 'save_last_n_states',
-        label: '保留最近状态数',
-        hint: '最多保留几个状态目录（防磁盘膨胀）。',
-        placeholder: '3',
-        kind: 'num',
-      },
-      {
-        key: 'sample_every_n_epochs',
-        label: '示例图间隔（轮）',
-        hint: '每 N 轮生成一批示例图（0 = 不生成）。训练过程可视化，强烈建议开启。',
-        placeholder: '1',
-        kind: 'num',
-      },
-      {
-        key: 'sample_prompts',
-        label: '示例图提示词',
-        hint: '每行一个提示词；可含触发词。训练到每轮时按此出图。',
-        placeholder: '每行一个提示词',
-        kind: 'textlist',
-      },
-      {
-        key: 'sample_steps',
-        label: '示例图步数',
-        hint: '生成示例图用的去噪步数（20~30 常见；越高越精细越慢）。',
-        placeholder: '24',
-        kind: 'num',
-      },
-      {
-        key: 'guidance_scale',
-        label: '示例图引导强度',
-        hint: 'CFG 强度（4~7 常见；越高越贴提示词）。',
-        placeholder: '5.0',
-        kind: 'num',
-        step: 'any',
-      },
-      {
-        key: 'negative_prompt',
-        label: '示例图负向提示词',
-        hint: '示例图的负向提示词（如 lowres, bad anatomy）。',
-        placeholder: 'lowres, bad anatomy',
-        kind: 'text',
-      },
-      {
-        key: 'sample_sampler',
-        label: '示例图采样器',
-        hint: 'euler_a 常用；示例图生成的扩散采样器。',
-        placeholder: 'euler_a',
-        kind: 'text',
-      },
-    ],
-  },
 ]
 /** 新建丹方表单的默认值（与后端 RecipeData 对齐）。 */
 function defaultData(): Record<string, unknown> {
@@ -513,6 +695,10 @@ function defaultData(): Record<string, unknown> {
     batch_size: 1,
     resolution: 1024,
     enable_bucket: true,
+    min_bucket_reso: 256,
+    max_bucket_reso: 1024,
+    bucket_reso_steps: 64,
+    bucket_no_upscale: true,
     cache_latents: true,
     cache_text_encoder_outputs: true,
     mixed_precision: 'bf16',
@@ -522,12 +708,16 @@ function defaultData(): Record<string, unknown> {
     seed: 42,
     min_snr_gamma: 5,
     shuffle_caption: true,
+    weighted_captions: false,
     keep_tokens: 1,
     caption_dropout_rate: 0.05,
+    save_precision: 'fp16',
     save_every_n_epochs: 1,
     sample_enabled: true,
     sample_every_n_epochs: 1,
     sample_prompts: [] as string[],
+    network_args_custom: [] as string[],
+    optimizer_args_custom: [] as string[],
     sample_sampler: 'euler_a',
   }
 }
@@ -633,6 +823,8 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [msgError, setMsgError] = useState(false)
+  /** 折叠卡片展开状态：默认展开前 3 组，其余收起；点击分组标题切换。 */
+  const [open, setOpen] = useState<Set<string>>(new Set(['训练用模型', '数据集设置', '网络设置']))
 
   /** 状态消息：isError=true 渲染为红色错误样式（.status-line.error）。 */
   const showMsg = (m: string | null, isError = false) => {
@@ -664,6 +856,14 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       } else if (k === 'sample_every_n_epochs' && typeof v === 'number') {
         next.sample_enabled = v > 0
       }
+      return next
+    })
+
+  const toggleSection = (title: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(title)) next.delete(title)
+      else next.add(title)
       return next
     })
 
@@ -894,12 +1094,12 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
 
   const datasetInfo = datasets.find((d) => d.dir === datasetDir)
 
-  // 全量模式：过滤 LoRA 专属分区
-  const hiddenSections = full ? ['数据与概念', '网络结构'] : []
+  // 全量模式：过滤 LoRA 专属分区（训练用模型 / 网络设置）
+  const hiddenSections = full ? ['训练用模型', '网络设置'] : []
   const sections = FORM_SECTIONS.filter((sec) => !hiddenSections.includes(sec.title))
-  // 全量模式：缓存与精度区只显示混合精度
+  // 全量模式：精度与缓存区只显示混合精度
   const visibleFields = (sec: { title: string; fields: FieldDef[] }) => {
-    if (full && sec.title === '缓存与精度') {
+    if (full && sec.title === '精度与缓存') {
       return sec.fields.filter((f) => f.key === 'mixed_precision')
     }
     return sec.fields
@@ -1059,18 +1259,35 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
           </div>
         )}
 
-        {sections.map((sec) => (
-          <div key={sec.title} className="form-sec">
-            <h4>{sec.title}</h4>
-            <div className="form-grid">
-              {visibleFields(sec)
-                .filter((f) => !f.sdxlOnly || family === 'sdxl1')
-                .map((f) => (
-                  <FieldInput key={f.key} field={f} value={data[f.key]} onChange={(v) => setField(f.key, v)} />
-                ))}
+        {sections.map((sec) => {
+          const isOpen = open.has(sec.title)
+          return (
+            <div key={sec.title} className="form-sec-card">
+              <button
+                type="button"
+                className="form-sec-title"
+                aria-expanded={isOpen}
+                onClick={() => toggleSection(sec.title)}
+              >
+                <span className="form-sec-caret" aria-hidden="true">
+                  {isOpen ? '▾' : '▸'}
+                </span>
+                {sec.title}
+              </button>
+              {isOpen && (
+                <div className="form-sec-body">
+                  <div className="form-grid">
+                    {visibleFields(sec)
+                      .filter((f) => !f.sdxlOnly || family === 'sdxl1')
+                      .map((f) => (
+                        <FieldInput key={f.key} field={f} value={data[f.key]} onChange={(v) => setField(f.key, v)} />
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         <div className="actions">
           <button onClick={() => void onSave()} disabled={busy} className="secondary">

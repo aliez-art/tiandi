@@ -29,18 +29,53 @@ pub fn build_sdscripts_toml(
     if let Some(tok2) = &paths.tokenizer2 {
         t.push_str(&format!("tokenizer2 = \"{}\"\n", tok2.replace('\\', "/")));
     }
+    // Anima 家族：Qwen3 TE / VAE / 分词器（模型相关顶层参数）
+    if family == ModelFamily::DitAnima {
+        if let Some(q) = &paths.anima_qwen3 {
+            t.push_str(&format!("qwen3 = \"{}\"\n", q.replace('\\', "/")));
+        }
+        if let Some(v) = &paths.anima_vae {
+            t.push_str(&format!("vae = \"{}\"\n", v.replace('\\', "/")));
+        }
+        if let Some(t5) = &paths.anima_t5_tokenizer {
+            t.push_str(&format!(
+                "t5_tokenizer_path = \"{}\"\n",
+                t5.replace('\\', "/")
+            ));
+        }
+        if let Some(qt) = &paths.anima_qwen3_tokenizer {
+            t.push_str(&format!(
+                "qwen3_tokenizer_path = \"{}\"\n",
+                qt.replace('\\', "/")
+            ));
+        }
+    }
     t.push('\n');
 
     // [network]
     t.push_str("[network]\n");
+    // Anima 家族网络：lora_anima / tlora_anima（kohya 生态）
+    let network_module = if family == ModelFamily::DitAnima {
+        match recipe.network_type {
+            tiandi_recipe::NetworkType::Tlora => "tlora_anima",
+            _ => "lora_anima",
+        }
+    } else {
+        network_module(recipe.network_type)
+    };
     t.push_str(&format!(
         "network_module = \"networks.{}\"\n",
-        network_module(recipe.network_type)
+        network_module
     ));
     t.push_str(&format!("network_dim = {}\n", recipe.network_dim));
     t.push_str(&format!("network_alpha = {}\n", recipe.network_alpha));
     if let Some(bw) = &recipe.block_weights {
         t.push_str(&format!("down_lr_weight = \"{}\"\n", bw));
+    }
+    // Anima：attn 模式（torch 最稳，Windows 下 xformers 可选）
+    if family == ModelFamily::DitAnima {
+        t.push_str("attn_mode = \"torch\"\n");
+        t.push_str("split_attn = true\n");
     }
     t.push('\n');
 
@@ -103,10 +138,9 @@ pub fn build_sdscripts_toml(
         t.push_str(&format!("noise_offset = {no}\n"));
     }
     t.push_str(&format!("cache_latents = {}\n", recipe.cache_latents));
-    t.push_str(&format!(
-        "cache_text_encoder_outputs = {}\n",
-        recipe.cache_text_encoder_outputs
-    ));
+    // Anima 家族：不缓存 TE 输出（需训练 Qwen3 TE）；其余按丹方
+    let cache_te = recipe.cache_text_encoder_outputs && family != ModelFamily::DitAnima;
+    t.push_str(&format!("cache_text_encoder_outputs = {cache_te}\n"));
     t.push_str(&format!(
         "save_every_n_epochs = {}\n",
         recipe.save_every_n_epochs
@@ -183,6 +217,14 @@ pub struct TrainPaths {
     pub tokenizer: Option<String>,
     /// 本地 CLIP-G tokenizer2 目录（可选；SDXL 双编码器）
     pub tokenizer2: Option<String>,
+    /// Anima：Qwen3 文本编码器路径
+    pub anima_qwen3: Option<String>,
+    /// Anima：VAE 路径
+    pub anima_vae: Option<String>,
+    /// Anima：T5 旧分词器目录
+    pub anima_t5_tokenizer: Option<String>,
+    /// Anima：Qwen3 分词器目录
+    pub anima_qwen3_tokenizer: Option<String>,
 }
 
 /// 预热步数：按总步数比例换算（M1 估算：epochs × 1000 步/轮基准）。
@@ -239,6 +281,10 @@ mod tests {
             resume: None,
             tokenizer: None,
             tokenizer2: None,
+            anima_qwen3: None,
+            anima_vae: None,
+            anima_t5_tokenizer: None,
+            anima_qwen3_tokenizer: None,
         }
     }
 

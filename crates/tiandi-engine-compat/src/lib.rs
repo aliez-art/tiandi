@@ -110,6 +110,32 @@ impl SdScriptsTrainer {
                 .map_err(|e| EngineError::Spawn(format!("丹方参数解析失败：{e}")))?;
             // 本地 tokenizer（离线化：<workspace>/tokenizers/{clip-l,clip-g}）
             let (tokenizer, tokenizer2) = self.local_tokenizers();
+            // Anima 家族：qwen3 TE / VAE 与基底模型同目录探测；T5 分词器用内核自带
+            let (anima_qwen3, anima_vae, anima_t5_tokenizer) =
+                if job.family == tiandi_core::ModelFamily::DitAnima {
+                    let base_dir = job
+                        .base_model
+                        .as_ref()
+                        .map(std::path::Path::new)
+                        .and_then(|p| p.parent())
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_default();
+                    let qwen3 = base_dir.join("qwen_3_06b_base.safetensors");
+                    let vae = base_dir.join("qwen_image_vae.safetensors");
+                    let t5 = self
+                        .env
+                        .sd_scripts
+                        .as_ref()
+                        .map(|s| s.join("configs/t5_old"))
+                        .filter(|p| p.is_dir());
+                    (
+                        qwen3.exists().then(|| qwen3.to_string_lossy().into_owned()),
+                        vae.exists().then(|| vae.to_string_lossy().into_owned()),
+                        t5.map(|p| p.to_string_lossy().into_owned()),
+                    )
+                } else {
+                    (None, None, None)
+                };
             let paths = TrainPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
@@ -123,6 +149,10 @@ impl SdScriptsTrainer {
                 resume: job.resume_dir.clone(),
                 tokenizer,
                 tokenizer2,
+                anima_qwen3,
+                anima_vae,
+                anima_t5_tokenizer,
+                anima_qwen3_tokenizer: None,
             };
             let toml = build_sdscripts_toml(&recipe, job.family, &paths);
             std::fs::write(&config_path, toml)

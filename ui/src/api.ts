@@ -295,8 +295,16 @@ export async function pickDir(): Promise<string | null> {
   return j.path
 }
 
-/** 资产导入到工作区 models 目录（base_model / vae / clip），返回正式路径。 */
-export async function importAsset(kind: 'base_model' | 'vae' | 'clip', path: string): Promise<string> {
+/** 资产导入结果：path 为导入后的正式路径；base_model 导入时可能顺带返回
+ *  同目录配套的 VAE / 文本编码器（Anima/Krea 2 场景，自动导入并填表）。 */
+export interface ImportResult {
+  path: string
+  vae_path: string | null
+  te_path: string | null
+}
+
+/** 资产导入到工作区 models 目录（base_model / vae / clip）。 */
+export async function importAsset(kind: 'base_model' | 'vae' | 'clip', path: string): Promise<ImportResult> {
   const res = await fetch(`${base()}/api/import-asset`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -306,7 +314,6 @@ export async function importAsset(kind: 'base_model' | 'vae' | 'clip', path: str
     const err = (await res.json().catch(() => null)) as { error?: string } | null
     throw new Error(err?.error ?? `import asset ${res.status}`)
   }
-  const j = (await res.json()) as { path: string }
-  return j.path
+  return (await res.json()) as ImportResult
 }
 

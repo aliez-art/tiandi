@@ -36,10 +36,21 @@ struct ImportAsset {
 struct ImportResult {
     /// 导入后的正式路径（<workspace>/models/<kind>/<name>）
     path: String,
+    /// base_model 导入时顺带导入的同目录 VAE（Anima/Krea 2 场景），无则 null
+    vae_path: Option<String>,
+    /// base_model 导入时顺带导入的同目录文本编码器（Qwen3 系），无则 null
+    te_path: Option<String>,
 }
 
-/// 把用户选择的文件收纳进工作区 models 目录（硬链接优先，跨盘回退复制），
-/// 与 ComfyUI 的 models 目录风格一致。
+/// 把用户选择的文件收纳进工作区 models 目录（硬链接优先，跨盘回退复制）。
+///
+/// - **幂等**：目标（含 `_N` 序号变体）已存在且与源文件同尺寸同修改时间时，
+///   直接复用现有路径，不复制、不累加序号（修复重复选择导致
+///   `xxx1.safetensors`、`xxx2.safetensors` 无限累积的问题）；
+/// - **配套资产顺带导入**：导入底模（base_model）时，若源目录存在
+///   Qwen3 系文本编码器（qwen_3_06b_base 等）与 VAE（qwen_image_vae 等），
+///   一并导入到 models/clip 与 models/vae 并返回路径（Anima/Krea 2 训练必需，
+///   避免"选完底模还要手动找 TE/VAE"）。
 async fn import_asset(
     State(state): State<AppState>,
     Json(input): Json<ImportAsset>,
@@ -61,36 +72,101 @@ async fn import_asset(
             input.path
         )));
     }
-    let file_name = src
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| ApiError::BadRequest("无法解析文件名".into()))?;
     let models_root = crate::output_root(state.trainer.runs_dir())
         .parent()
         .unwrap_or_else(|| state.trainer.runs_dir())
         .join("models");
-    let target_dir = models_root.join(dir_name);
-    std::fs::create_dir_all(&target_dir)
+    let path = import_one(&models_root.join(dir_name), &src)?;
+
+    // base_model：顺带导入同目录配套资产（Qwen3 TE / VAE）
+    let (vae_path, te_path) = if input.kind == "base_model" {
+        if let Some(dir) = src.parent() {
+            let vae = find_sibling_safetensors(dir, &["qwen_image_vae", "image_vae"]);
+            let te = find_sibling_safetensors(dir, &["qwen_3_06b_base", "qwen3vl_4b", "qwen_3"]);
+            let vae_path = vae
+                .as_ref()
+                .map(|p| import_one(&models_root.join("vae"), p))
+                .transpose()?;
+            let te_path = te
+                .as_ref()
+                .map(|p| import_one(&models_root.join("clip"), p))
+                .transpose()?;
+            (vae_path, te_path)
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+    Ok(Json(ImportResult {
+        path,
+        vae_path,
+        te_path,
+    }))
+}
+
+/// 单文件幂等导入：目标已存在且与源文件相同（尺寸 + 修改时间）→ 复用；
+/// 否则取第一个不存在的 `_N` 序号名；同盘硬链接、跨盘复制。
+fn import_one(target_dir: &std::path::Path, src: &std::path::Path) -> Result<String, ApiError> {
+    let file_name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| ApiError::BadRequest("无法解析文件名".into()))?;
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+    std::fs::create_dir_all(target_dir)
         .map_err(|e| ApiError::Internal(format!("创建目录失败：{e}")))?;
 
-    // 目标路径（同名冲突自动加序号）
+    let same_as_src = |p: &std::path::Path| -> bool {
+        p.is_file()
+            && std::fs::metadata(p)
+                .and_then(|m1| {
+                    std::fs::metadata(src)
+                        .map(|m2| m1.len() == m2.len() && m1.modified().ok() == m2.modified().ok())
+                })
+                .unwrap_or(false)
+    };
+    // 已存在同源文件 → 直接复用（幂等，不累加序号）
     let mut target = target_dir.join(file_name);
-    let mut n = 1;
-    while target.exists() {
-        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
-        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
-        target = target_dir.join(format!("{stem}_{n}.{ext}"));
-        n += 1;
+    if target.exists() {
+        if same_as_src(&target) {
+            return Ok(target.to_string_lossy().into_owned());
+        }
+        for n in 1..1000 {
+            let cand = target_dir.join(format!("{stem}_{n}.{ext}"));
+            if !cand.exists() {
+                target = cand;
+                break;
+            }
+            if same_as_src(&cand) {
+                return Ok(cand.to_string_lossy().into_owned());
+            }
+        }
     }
-    // 同盘硬链接（即时）；跨盘复制
-    let ok = std::fs::hard_link(&src, &target).is_ok();
+    let ok = std::fs::hard_link(src, &target).is_ok();
     if !ok {
-        std::fs::copy(&src, &target)
+        std::fs::copy(src, &target)
             .map_err(|e| ApiError::Internal(format!("复制文件失败：{e}")))?;
     }
-    Ok(Json(ImportResult {
-        path: target.to_string_lossy().into_owned(),
-    }))
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// 目录中按文件名子串（不区分大小写）找第一个匹配的 .safetensors。
+fn find_sibling_safetensors(dir: &std::path::Path, needles: &[&str]) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if name.ends_with(".safetensors")
+            && needles.iter().any(|n| name.contains(&n.to_lowercase()))
+        {
+            return Some(path);
+        }
+    }
+    None
 }
 
 // ---------- 本地文件选择（rfd 原生对话框） ----------

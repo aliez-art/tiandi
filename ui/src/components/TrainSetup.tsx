@@ -421,6 +421,12 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
     title: '保存与采样（每轮示例图）',
     fields: [
       {
+        key: 'sample_enabled',
+        label: '训练中生成示例图',
+        hint: '训练过程中按轮生成预览图（在训练控制台画廊展示）。关闭则跳过采样、训练更快。',
+        kind: 'bool',
+      },
+      {
         key: 'save_every_n_epochs',
         label: '保存间隔（轮）',
         hint: '每 N 轮存一个 LoRA 检查点（断点续训也依赖它）。',
@@ -519,7 +525,8 @@ function defaultData(): Record<string, unknown> {
     keep_tokens: 1,
     caption_dropout_rate: 0.05,
     save_every_n_epochs: 1,
-    sample_every_n_epochs: 0,
+    sample_enabled: true,
+    sample_every_n_epochs: 1,
     sample_prompts: [] as string[],
     sample_sampler: 'euler_a',
   }
@@ -651,6 +658,12 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       if (k === 'train_text_encoder' && v === true) {
         next.cache_text_encoder_outputs = false
       }
+      // 示例图开关 ↔ 采样间隔联动（0 = 关闭采样）
+      if (k === 'sample_enabled') {
+        next.sample_every_n_epochs = v === true ? 1 : 0
+      } else if (k === 'sample_every_n_epochs' && typeof v === 'number') {
+        next.sample_enabled = v > 0
+      }
       return next
     })
 
@@ -665,11 +678,14 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       const path = await pickFile()
       if (path) {
         const imported = await importAsset('base_model', path)
-        setModelPath(imported)
+        setModelPath(imported.path)
+        // 底模同目录的配套资产（Anima/Krea 2 的 Qwen3 TE 与 VAE）自动导入并填表
+        if (imported.vae_path) setVaePath(imported.vae_path)
+        if (imported.te_path) setTePath(imported.te_path)
         // 已注册模型 → 同步丹方族（避免 sdxl1 丹方配 anima 底模之类的族错配）
-        const known = models.find((m) => m.path === imported || m.path === path)
+        const known = models.find((m) => m.path === imported.path || m.path === path)
         if (known) setFamily(known.family)
-        showMsg(`已选底模：${imported}`)
+        showMsg(`已选底模：${imported.path}`)
       } else {
         showMsg('未选择文件（已取消）')
       }
@@ -687,8 +703,10 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       const path = await pickFile()
       if (path) {
         const imported = await importAsset('vae', path)
-        setVaePath(imported)
-        showMsg(`已选 VAE：${imported}`)
+        setVaePath(imported.path)
+        showMsg(`已选 VAE：${imported.path}`)
+      } else {
+        showMsg('未选择文件（已取消）')
       }
     } catch (e) {
       showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
@@ -704,8 +722,10 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       const path = await pickFile()
       if (path) {
         const imported = await importAsset('clip', path)
-        setTePath(imported)
-        showMsg(`已选文本编码器：${imported}`)
+        setTePath(imported.path)
+        showMsg(`已选文本编码器：${imported.path}`)
+      } else {
+        showMsg('未选择文件（已取消）')
       }
     } catch (e) {
       showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
@@ -846,6 +866,11 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
     setFamily(r.family)
     const d = r.data as Record<string, unknown>
     setData({ ...defaultData(), ...d })
+    // 示例图开关与采样间隔同步（旧丹方无 sample_enabled 时按间隔推导）
+    setData((prev) => ({
+      ...prev,
+      sample_enabled: (prev.sample_every_n_epochs as number) > 0,
+    }))
     if (typeof d.model_path === 'string') setModelPath(d.model_path)
     if (typeof d.vae_path === 'string') setVaePath(d.vae_path)
     if (typeof d.te_path === 'string') setTePath(d.te_path)

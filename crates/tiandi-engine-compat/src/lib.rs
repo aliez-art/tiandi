@@ -261,6 +261,14 @@ impl SdScriptsTrainer {
                 anima_t5_tokenizer,
                 anima_qwen3_tokenizer: None,
             };
+            // Anima 训练无论是否微调 TE 都必须加载 Qwen3 文本编码器（模型结构必需）：
+            // 探测失败时给出明确中文指引（选择底模同目录文件，或在上方手动选择
+            // 文本编码器/VAE），而不是让内核报 "Either qwen3_tokenizer or qwen3_path"
+            if job.family == tiandi_core::ModelFamily::DitAnima && paths.anima_qwen3.is_none() {
+                return Err(EngineError::Spawn(
+                    "Anima 底模缺少配套 Qwen3 文本编码器（qwen_3_06b_base.safetensors）：请选择底模同目录文件，或在丹方页手动选择「文本编码器 / CLIP」与「VAE」（Anima 训练必须加载 Qwen3 TE 与 Qwen-Image VAE，与是否微调 TE 无关）".into(),
+                ));
+            }
             // 全量微调（full_finetune=true）：无 LoRA 网络段，输出完整 checkpoint
             let full = job
                 .params

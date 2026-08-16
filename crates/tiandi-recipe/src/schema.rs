@@ -119,6 +119,27 @@ pub enum Precision {
     Fp32,
 }
 
+/// 预测目标（模型训练时使用的去噪目标；SDXL 族映射为 sd-scripts `v_parameterization`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PredictionType {
+    #[serde(rename = "epsilon")]
+    Epsilon,
+    #[serde(rename = "v")]
+    V,
+    #[serde(rename = "sample")]
+    Sample,
+}
+
+impl PredictionType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Epsilon => "epsilon（常规）",
+            Self::V => "v（速度场）",
+            Self::Sample => "sample（x0）",
+        }
+    }
+}
+
 /// 丹方数据（M1 核心子集）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -162,6 +183,8 @@ pub struct RecipeData {
     pub block_weights: Option<String>,
     /// 训练触发词/概念名（加入 caption）
     pub trigger_word: Option<String>,
+    /// 预测目标（None = 随模型/后端默认；v 预测模型需显式指定 "v"）
+    pub prediction_type: Option<PredictionType>,
 }
 
 impl Default for RecipeData {
@@ -198,6 +221,7 @@ impl Default for RecipeData {
             sample_sampler: "euler_a".to_string(),
             block_weights: None,
             trigger_word: None,
+            prediction_type: None,
         }
     }
 }

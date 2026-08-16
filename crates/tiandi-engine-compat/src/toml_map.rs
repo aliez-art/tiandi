@@ -161,6 +161,21 @@ pub fn build_sdscripts_toml(
     if let Some(tw) = &recipe.trigger_word {
         t.push_str(&format!("trigger_word = \"{tw}\"\n"));
     }
+    // 预测目标：SDXL 族映射为 sd-scripts v_parameterization（v 预测模型必须开启）
+    if family == ModelFamily::Sdxl1 {
+        match recipe.prediction_type {
+            Some(tiandi_recipe::PredictionType::V) => {
+                t.push_str("v_parameterization = true\n");
+            }
+            Some(tiandi_recipe::PredictionType::Epsilon) => {
+                t.push_str("v_parameterization = false\n");
+            }
+            Some(tiandi_recipe::PredictionType::Sample) => {
+                t.push_str("# prediction_type=sample：sd-scripts SDXL 路径不支持，按 epsilon 处理\n");
+            }
+            None => {}
+        }
+    }
     // DiT 族：预测目标与时间步（M2 随 Anima 路径细化；Krea 2 走 ai-toolkit 不在此）
     if family == ModelFamily::DitAnima {
         // anima_train_network.py 需要 qwen3 文本编码器路径等，M2 补充
@@ -354,5 +369,28 @@ mod tests {
         };
         let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
         assert!(toml.contains("trigger_word = \"zhongzi\""));
+    }
+
+    #[test]
+    fn v_prediction_emits_v_parameterization_sdxl_only() {
+        let recipe = RecipeData {
+            prediction_type: Some(tiandi_recipe::PredictionType::V),
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
+        assert!(toml.contains("v_parameterization = true"), "{toml}");
+        // Anima 家族不输出该参数（其预测目标由 anima 训练脚本自理）
+        let anima_toml = build_sdscripts_toml(&recipe, ModelFamily::DitAnima, &paths());
+        assert!(!anima_toml.contains("v_parameterization"), "{anima_toml}");
+    }
+
+    #[test]
+    fn epsilon_prediction_emits_explicit_false() {
+        let recipe = RecipeData {
+            prediction_type: Some(tiandi_recipe::PredictionType::Epsilon),
+            ..RecipeData::default()
+        };
+        let toml = build_sdscripts_toml(&recipe, ModelFamily::Sdxl1, &paths());
+        assert!(toml.contains("v_parameterization = false"), "{toml}");
     }
 }

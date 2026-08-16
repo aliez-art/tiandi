@@ -52,6 +52,7 @@ fn sdxl_noobai_entry() -> RecipeFile {
         sample_sampler: "euler_a".to_string(),
         block_weights: None,
         trigger_word: None,
+        prediction_type: None,
     };
     RecipeFile::new("SDXL 入门（NoobAI/Illusion）", ModelFamily::Sdxl1, data)
 }
@@ -93,6 +94,7 @@ fn sdxl_advanced() -> RecipeFile {
         sample_sampler: "euler_a".to_string(),
         block_weights: Some("0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,1".into()),
         trigger_word: None,
+        prediction_type: None,
     };
     RecipeFile::new(
         "SDXL 进阶（低 LR + LoCon + 块权重）",
@@ -135,6 +137,7 @@ fn anima_entry() -> RecipeFile {
         sample_sampler: "euler".to_string(),
         block_weights: None,
         trigger_word: None,
+        prediction_type: None,
     };
     RecipeFile::new("Anima 入门（DiT）", ModelFamily::DitAnima, data)
 }
@@ -173,6 +176,7 @@ fn krea2_entry() -> RecipeFile {
         sample_sampler: "euler".to_string(),
         block_weights: None,
         trigger_word: None,
+        prediction_type: None,
     };
     RecipeFile::new("Krea 2 入门（DiT）", ModelFamily::DitKrea2, data)
 }

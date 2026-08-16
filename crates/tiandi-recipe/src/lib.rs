@@ -10,5 +10,7 @@ pub mod validate;
 
 pub use file::{RecipeFile, RecipeMeta};
 pub use preset::builtin_presets;
-pub use schema::{NetworkType, OptimizerKind, Precision, RecipeData, SchedulerKind};
+pub use schema::{
+    NetworkType, OptimizerKind, Precision, PredictionType, RecipeData, SchedulerKind,
+};
 pub use validate::{validate_recipe, IssueLevel, RecipeIssue};

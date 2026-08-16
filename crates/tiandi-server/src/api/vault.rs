@@ -68,19 +68,19 @@ async fn get_one(
     Ok(Json(store.get_checkpoint(&id)?))
 }
 
-/// 删除：移除记录 + 尝试删除文件（相对 runs 根解析）。
+/// 删除：移除记录 + 尝试删除文件（相对 output 根解析）。
 async fn delete_one(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let runs_dir = state.trainer.runs_dir().to_path_buf();
+    let output_root = crate::output_root(state.trainer.runs_dir());
     let store = state.store.lock().await;
     let cp = store.get_checkpoint(&id)?;
     store.delete_checkpoint(&id)?;
     drop(store);
 
     // 文件删除失败不阻塞（记录已删）
-    let abs = runs_dir.join(&cp.path);
+    let abs = output_root.join(&cp.path);
     if abs.is_file() {
         let _ = std::fs::remove_file(&abs);
     }
@@ -104,12 +104,12 @@ async fn rename_one(
             "名称不能为空且不能包含路径分隔符".into(),
         ));
     }
-    let runs_dir = state.trainer.runs_dir().to_path_buf();
+    let output_root = crate::output_root(state.trainer.runs_dir());
     let store = state.store.lock().await;
     let cp = store.get_checkpoint(&id)?;
 
     // 新路径：同目录 + 新名 + 原扩展名
-    let abs = runs_dir.join(&cp.path);
+    let abs = output_root.join(&cp.path);
     let new_abs = match abs.parent() {
         Some(parent) => {
             let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -126,7 +126,7 @@ async fn rename_one(
         .map_err(|e| ApiError::BadRequest(format!("重命名文件失败：{e}")))?;
 
     let new_path = new_abs
-        .strip_prefix(&runs_dir)
+        .strip_prefix(&output_root)
         .unwrap_or(&new_abs)
         .to_string_lossy()
         .replace('\\', "/");

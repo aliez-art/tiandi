@@ -33,7 +33,7 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [connecting, setConnecting] = useState(true)
   const [system, setSystem] = useState<SystemInfo | null>(null)
-  const [view, setView] = useState<'recipe' | 'runs'>('recipe')
+  const [view, setView] = useState<'lora' | 'full' | 'runs'>('lora')
   const [runs, setRuns] = useState<Run[]>([])
   const [previews, setPreviews] = useState<Record<string, string>>({})
   const [events, setEvents] = useState<EventLine[]>([])
@@ -175,8 +175,12 @@ export default function App() {
       <main className="side-layout">
         {/* 左侧边栏 */}
         <aside className="side-nav">
-          <button className={`side-item ${view === 'recipe' ? 'active' : ''}`} onClick={() => setView('recipe')}>
-            丹方
+          <div className="side-group">丹方</div>
+          <button className={`side-item ${view === 'lora' ? 'active' : ''}`} onClick={() => setView('lora')}>
+            LoRA 训练
+          </button>
+          <button className={`side-item ${view === 'full' ? 'active' : ''}`} onClick={() => setView('full')}>
+            全量训练
           </button>
           <button className={`side-item ${view === 'runs' ? 'active' : ''}`} onClick={() => setView('runs')}>
             炼丹记录
@@ -185,8 +189,19 @@ export default function App() {
 
         {/* 右侧主区 */}
         <section className="side-main">
-          {view === 'recipe' ? (
+          {view === 'lora' ? (
             <RecipeForm
+              key="lora"
+              onCreated={(runId) => {
+                setSelected(runId)
+                setView('runs')
+                void refreshRuns()
+              }}
+            />
+          ) : view === 'full' ? (
+            <RecipeForm
+              key="full"
+              full
               onCreated={(runId) => {
                 setSelected(runId)
                 setView('runs')

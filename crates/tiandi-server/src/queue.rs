@@ -112,8 +112,10 @@ pub async fn build_job(
     }
 
     let runs_dir = state.trainer.runs_dir();
+    // 产物目录：<workspace>/output/<run_id>（示例图与每轮 LoRA 集中存放）
+    let output_dir = crate::output_root(runs_dir).join(&run.id);
     // 断点续训：checkpoints 下最新 *.state 目录（sd-scripts save_state 产物）
-    let resume_dir = detect_resume_dir(&runs_dir.join(&run.id));
+    let resume_dir = detect_resume_dir(&output_dir);
     // 设置注入：镜像源等（HF_ENDPOINT 等环境变量传给内核）
     let mut env: Vec<(String, String)> = Vec::new();
     {
@@ -131,7 +133,7 @@ pub async fn build_job(
         run_id: run.id.clone(),
         recipe_path: recipe_id.unwrap_or_default(),
         dataset_dir,
-        output_dir: runs_dir.join(&run.id).to_string_lossy().into_owned(),
+        output_dir: output_dir.to_string_lossy().into_owned(),
         params,
         family,
         base_model,

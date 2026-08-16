@@ -290,6 +290,178 @@ pub fn build_sdscripts_toml(
     t
 }
 
+/// 生成 sd-scripts 全量微调（full fine-tune）配置 TOML：无 LoRA 网络段，
+/// 输出完整模型 checkpoint；train_text_encoder 可选。
+pub fn build_sdscripts_toml_full(
+    recipe: &RecipeData,
+    family: ModelFamily,
+    paths: &TrainPaths,
+    train_text_encoder: bool,
+) -> String {
+    let mut t = String::new();
+
+    // [model]
+    t.push_str("[model]\n");
+    t.push_str(&format!(
+        "pretrained_model_name_or_path = \"{}\"\n",
+        paths.base_model.replace('\\', "/")
+    ));
+    if let Some(tok) = &paths.tokenizer {
+        t.push_str(&format!("tokenizer = \"{}\"\n", tok.replace('\\', "/")));
+    }
+    if let Some(tok2) = &paths.tokenizer2 {
+        t.push_str(&format!("tokenizer2 = \"{}\"\n", tok2.replace('\\', "/")));
+    }
+    if family == ModelFamily::DitAnima {
+        if let Some(q) = &paths.anima_qwen3 {
+            t.push_str(&format!("qwen3 = \"{}\"\n", q.replace('\\', "/")));
+        }
+        if let Some(v) = &paths.anima_vae {
+            t.push_str(&format!("vae = \"{}\"\n", v.replace('\\', "/")));
+        }
+        if let Some(t5) = &paths.anima_t5_tokenizer {
+            t.push_str(&format!(
+                "t5_tokenizer_path = \"{}\"\n",
+                t5.replace('\\', "/")
+            ));
+        }
+        if let Some(qt) = &paths.anima_qwen3_tokenizer {
+            t.push_str(&format!(
+                "qwen3_tokenizer_path = \"{}\"\n",
+                qt.replace('\\', "/")
+            ));
+        }
+    }
+    t.push('\n');
+
+    // [optimizer]
+    t.push_str("[optimizer]\n");
+    t.push_str(&format!(
+        "optimizer_type = \"{}\"\n",
+        optimizer_type(recipe.optimizer)
+    ));
+    t.push('\n');
+
+    // [training]
+    t.push_str("[training]\n");
+    t.push_str(&format!("learning_rate = {}\n", recipe.learning_rate));
+    if train_text_encoder {
+        t.push_str("train_text_encoder = true\n");
+        if let Some(te) = recipe.text_encoder_lr {
+            t.push_str(&format!("text_encoder_lr = {te}\n"));
+        }
+    } else {
+        t.push_str("train_text_encoder = false\n");
+        t.push_str("text_encoder_lr = 0\n");
+    }
+    if let Some(u) = recipe.unet_lr {
+        t.push_str(&format!("unet_lr = {u}\n"));
+    }
+    t.push_str(&format!(
+        "lr_scheduler = \"{}\"\n",
+        recipe.lr_scheduler.label()
+    ));
+    t.push_str(&format!("lr_warmup_steps = {}\n", lr_warmup_steps(recipe)));
+    t.push_str(&format!("max_train_epochs = {}\n", recipe.max_train_epochs));
+    t.push_str(&format!("seed = {}\n", recipe.seed));
+    t.push_str(&format!(
+        "mixed_precision = \"{}\"\n",
+        precision(recipe.mixed_precision)
+    ));
+    t.push_str(&format!(
+        "gradient_checkpointing = {}\n",
+        recipe.gradient_checkpointing
+    ));
+    t.push_str(&format!(
+        "gradient_accumulation_steps = {}\n",
+        recipe.gradient_accumulation_steps
+    ));
+    t.push_str(&format!("max_grad_norm = {}\n", recipe.max_grad_norm));
+    t.push_str(&format!("shuffle_caption = {}\n", recipe.shuffle_caption));
+    t.push_str(&format!("keep_tokens = {}\n", recipe.keep_tokens));
+    if let Some(cd) = recipe.caption_dropout_rate {
+        t.push_str(&format!("caption_dropout_rate = {cd}\n"));
+    }
+    if let Some(snr) = recipe.min_snr_gamma {
+        t.push_str(&format!("min_snr_gamma = {snr}\n"));
+    }
+    if let Some(no) = recipe.noise_offset {
+        t.push_str(&format!("noise_offset = {no}\n"));
+    }
+    // 全量训练：latent 缓存可用（TE 不训时）
+    t.push_str(&format!("cache_latents = {}\n", recipe.cache_latents && !train_text_encoder));
+    t.push_str(&format!(
+        "save_every_n_epochs = {}\n",
+        recipe.save_every_n_epochs
+    ));
+    if let Some(v) = recipe.max_train_steps {
+        t.push_str(&format!("max_train_steps = {v}\n"));
+    }
+    t.push_str(&format!(
+        "output_dir = \"{}\"\n",
+        paths.output_dir.replace('\\', "/")
+    ));
+    t.push_str(&format!("output_name = \"{}\"\n", paths.output_name));
+    t.push_str("save_model_as = \"safetensors\"\n");
+    if let Some(resume) = &paths.resume {
+        t.push_str(&format!("resume = \"{}\"\n", resume.replace('\\', "/")));
+    }
+    if family == ModelFamily::Sdxl1 {
+        match recipe.prediction_type {
+            Some(tiandi_recipe::PredictionType::V) => {
+                t.push_str("v_parameterization = true\n");
+            }
+            Some(tiandi_recipe::PredictionType::Epsilon) => {
+                t.push_str("v_parameterization = false\n");
+            }
+            _ => {}
+        }
+    }
+    t.push('\n');
+
+    // [dataset]
+    t.push_str("[dataset]\n");
+    t.push_str(&format!(
+        "train_data_dir = \"{}\"\n",
+        paths.dataset_dir.replace('\\', "/")
+    ));
+    t.push_str(&format!("resolution = \"{}\"\n", recipe.resolution));
+    t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
+    if let Some(v) = recipe.num_repeats {
+        if v > 1 {
+            t.push_str(&format!("num_repeats = {v}\n"));
+        }
+    }
+    t.push('\n');
+
+    // [sampling]
+    if !recipe.sample_prompts.is_empty() && recipe.sample_every_n_epochs > 0 {
+        t.push_str("[sampling]\n");
+        t.push_str("sample_prompts = \"\"\"\n");
+        for p in &recipe.sample_prompts {
+            t.push_str(p);
+            t.push('\n');
+        }
+        t.push_str("\"\"\"\n");
+        t.push_str(&format!("sample_sampler = \"{}\"\n", recipe.sample_sampler));
+        if let Some(v) = recipe.sample_steps {
+            t.push_str(&format!("sample_steps = {v}\n"));
+        }
+        t.push('\n');
+    }
+
+    // [logging]
+    t.push_str("[logging]\n");
+    t.push_str("log_with = \"tensorboard\"\n");
+    t.push_str(&format!(
+        "logging_dir = \"{}\"\n",
+        paths.logging_dir.replace('\\', "/")
+    ));
+    t.push('\n');
+
+    t
+}
+
 /// 内核运行所需路径。
 pub struct TrainPaths {
     pub base_model: String,

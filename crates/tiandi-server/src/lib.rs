@@ -54,13 +54,14 @@ impl AppState {
 pub fn build_router(state: AppState) -> Router {
     // 本地单用户工具：WebView（tauri://localhost）与纯浏览器模式均需跨源访问，
     // 且服务只绑 127.0.0.1，permissive CORS 无风险（PRD §7 安全要求）。
-    // 路由：/api/* → API；/runs/* → runs 静态（采样图/产物）；其余 → UI（SPA，若存在）。
+    // 路由：/api/* → API；/output/* → 产物静态（示例图/LoRA）；其余 → UI（SPA，若存在）。
     let runs_dir = state.trainer.runs_dir().to_path_buf();
-    let serve_runs =
-        tower_http::services::ServeDir::new(&runs_dir).append_index_html_on_directories(false);
+    let output_root = output_root(&runs_dir);
+    let serve_output =
+        tower_http::services::ServeDir::new(&output_root).append_index_html_on_directories(false);
     let mut router = api::router(state)
         .layer(tower_http::cors::CorsLayer::permissive())
-        .nest_service("/runs", serve_runs.clone())
+        .nest_service("/output", serve_output.clone())
         // 未知 /api/* 路径：404（不落入 SPA fallback）
         .route(
             "/api/{*rest}",
@@ -75,12 +76,20 @@ pub fn build_router(state: AppState) -> Router {
                 .fallback(tower_http::services::ServeFile::new(ui.join("index.html")));
             router = router.fallback_service(spa);
         }
-        // 无 UI 产物：保持旧行为（runs 静态兜底）
+        // 无 UI 产物：保持旧行为（output 静态兜底）
         None => {
-            router = router.fallback_service(serve_runs);
+            router = router.fallback_service(serve_output);
         }
     }
     router
+}
+
+/// 产物根目录（runs 的兄弟目录 `<workspace>/output`）：示例图与每轮 LoRA 集中存放。
+pub fn output_root(runs_dir: &std::path::Path) -> std::path::PathBuf {
+    runs_dir
+        .parent()
+        .unwrap_or(runs_dir)
+        .join("output")
 }
 
 /// UI 构建产物目录（`<repo>/ui/dist`）；可用 `TIANDI_UI_DIR` 覆盖。

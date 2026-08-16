@@ -4,6 +4,7 @@ import {
   createRecipe,
   createRun,
   deleteRecipe,
+  importAsset,
   listDatasets,
   listModels,
   listRecipes,
@@ -530,8 +531,10 @@ function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unkn
   }
 }
 
-/** 丹方页（主页默认）：底模/数据集选择 + 完整参数表单 + 保存/点火。 */
-export function RecipeForm(props: { onCreated: (runId: string) => void }) {
+/** 丹方页：底模/数据集选择 + 完整参数表单 + 保存/点火。
+ *  `full=true` 为全量微调模式（无 LoRA 网络参数、可训练 TE）。 */
+export function RecipeForm(props: { onCreated: (runId: string) => void; full?: boolean }) {
+  const full = props.full ?? false
   const [recipes, setRecipes] = useState<RecipeView[]>([])
   const [models, setModels] = useState<BaseModel[]>([])
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -539,6 +542,8 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
   const [name, setName] = useState('')
   const [family, setFamily] = useState('sdxl1')
   const [modelPath, setModelPath] = useState('')
+  const [vaePath, setVaePath] = useState('')
+  const [tePath, setTePath] = useState('')
   const [datasetDir, setDatasetDir] = useState('')
   const [data, setData] = useState<Record<string, unknown>>(defaultData())
   const [busy, setBusy] = useState(false)
@@ -559,7 +564,7 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
 
   const basename = (p: string) => p.split(/[\\/]/).pop() ?? ''
 
-  // ---------- 底模 / 数据集选择 ----------
+  // ---------- 底模 / VAE / TE / 数据集选择 ----------
 
   const onPickModel = async () => {
     setBusy(true)
@@ -567,8 +572,43 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
     try {
       const path = await pickFile()
       if (path) {
-        setModelPath(path)
-        setMsg(`已选底模：${path}`)
+        const imported = await importAsset('base_model', path)
+        setModelPath(imported)
+        setMsg(`已选底模：${imported}`)
+      }
+    } catch (e) {
+      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onPickVae = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const path = await pickFile()
+      if (path) {
+        const imported = await importAsset('vae', path)
+        setVaePath(imported)
+        setMsg(`已选 VAE：${imported}`)
+      }
+    } catch (e) {
+      setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onPickTe = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const path = await pickFile()
+      if (path) {
+        const imported = await importAsset('clip', path)
+        setTePath(imported)
+        setMsg(`已选文本编码器：${imported}`)
       }
     } catch (e) {
       setMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`)
@@ -605,7 +645,10 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
     }
     // 底模/数据集随丹方保存（自定义键，后端 RecipeData 忽略未知字段）
     if (modelPath) payload.model_path = modelPath
+    if (vaePath) payload.vae_path = vaePath
+    if (tePath) payload.te_path = tePath
     if (datasetDir) payload.dataset_dir = datasetDir
+    if (full) payload.full_finetune = true
     return payload
   }
 
@@ -641,6 +684,10 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
   const onFire = async () => {
     if (!modelPath || !datasetDir) {
       setMsg('请先选择底模与数据集')
+      return
+    }
+    if (full && family === 'dit_krea2') {
+      setMsg('Krea 2 全量训练暂不支持（ai-toolkit 后端仅 LoRA）')
       return
     }
     setBusy(true)
@@ -686,6 +733,8 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
     const d = r.data as Record<string, unknown>
     setData({ ...defaultData(), ...d })
     if (typeof d.model_path === 'string') setModelPath(d.model_path)
+    if (typeof d.vae_path === 'string') setVaePath(d.vae_path)
+    if (typeof d.te_path === 'string') setTePath(d.te_path)
     if (typeof d.dataset_dir === 'string') setDatasetDir(d.dataset_dir)
     setMsg(`已载入丹方「${r.name}」`)
   }
@@ -706,41 +755,54 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
 
   const datasetInfo = datasets.find((d) => d.dir === datasetDir)
 
+  // 全量模式：过滤 LoRA 专属分区
+  const hiddenSections = full ? ['概念与预测', '网络结构'] : []
+  const sections = FORM_SECTIONS.filter((sec) => !hiddenSections.includes(sec.title))
+  // 全量模式：缓存与精度区只显示混合精度
+  const visibleFields = (sec: { title: string; fields: FieldDef[] }) => {
+    if (full && sec.title === '缓存与精度') {
+      return sec.fields.filter((f) => f.key === 'mixed_precision')
+    }
+    return sec.fields
+  }
+
   return (
     <div className="recipe-page">
-      {/* 已保存丹方 */}
+      {/* 已保存丹方（按模式过滤） */}
       <div className="panel recipe-load">
         <div className="panel-title">
-          <h2>已保存丹方</h2>
+          <h2>已保存丹方{full ? '（全量微调）' : ''}</h2>
         </div>
-        {recipes.length === 0 ? (
-          <p className="hint">暂无保存的丹方；在下方面板配置并点「保存丹方」。</p>
+        {recipes.filter((r) => full === ((r.data as Record<string, unknown>).full_finetune === true)).length === 0 ? (
+          <p className="hint">暂无保存的{full ? '全量' : ''}丹方；在下方面板配置并点「保存丹方」。</p>
         ) : (
           <ul className="runs datasets">
-            {recipes.map((r) => (
-              <li
-                key={r.id}
-                className={`run ${r.id === recipeId ? 'active' : ''}`}
-                onClick={() => onLoadRecipe(r)}
-              >
-                <span className="run-id">{r.name}</span>
-                <span className="run-state">{FAMILY_LABEL[r.family] ?? r.family}</span>
-                <span className="run-time">
-                  {typeof r.data.learning_rate === 'number' ? `lr ${r.data.learning_rate} · ` : ''}
-                  {typeof r.data.max_train_epochs === 'number' ? `${r.data.max_train_epochs} epochs` : ''}
-                </span>
-                <button
-                  className="run-del"
-                  title="删除丹方"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void onDeleteRecipe(r)
-                  }}
+            {recipes
+              .filter((r) => full === ((r.data as Record<string, unknown>).full_finetune === true))
+              .map((r) => (
+                <li
+                  key={r.id}
+                  className={`run ${r.id === recipeId ? 'active' : ''}`}
+                  onClick={() => onLoadRecipe(r)}
                 >
-                  ✕
-                </button>
-              </li>
-            ))}
+                  <span className="run-id">{r.name}</span>
+                  <span className="run-state">{FAMILY_LABEL[r.family] ?? r.family}</span>
+                  <span className="run-time">
+                    {typeof r.data.learning_rate === 'number' ? `lr ${r.data.learning_rate} · ` : ''}
+                    {typeof r.data.max_train_epochs === 'number' ? `${r.data.max_train_epochs} epochs` : ''}
+                  </span>
+                  <button
+                    className="run-del"
+                    title="删除丹方"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void onDeleteRecipe(r)
+                    }}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
           </ul>
         )}
       </div>
@@ -782,6 +844,38 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
                   : '未选择数据集（图片文件夹，每图配同名 .txt 描述）'}
               </div>
             </div>
+            <div className="field wide">
+              <span>VAE（可选）</span>
+              <div className="pick-row">
+                <button onClick={() => void onPickVae()} disabled={busy} className="secondary" title="Anima / Krea 2 训练必需 VAE；SDXL 底模一般内嵌 VAE 可不选">
+                  选择 VAE…
+                </button>
+                {vaePath && (
+                  <button className="danger" onClick={() => setVaePath('')} title="清除 VAE">
+                    清除
+                  </button>
+                )}
+              </div>
+              <div className={`pick-path ${vaePath ? '' : 'dim'}`} title={vaePath}>
+                {vaePath || '未选择（Anima / Krea 2 会自动探测同目录 VAE）'}
+              </div>
+            </div>
+            <div className="field wide">
+              <span>文本编码器 / CLIP（可选）</span>
+              <div className="pick-row">
+                <button onClick={() => void onPickTe()} disabled={busy} className="secondary" title="选择文本编码器文件（训练 TE 时必需；不选则用底模自带/自动探测）">
+                  选择文本编码器…
+                </button>
+                {tePath && (
+                  <button className="danger" onClick={() => setTePath('')} title="清除文本编码器">
+                    清除
+                  </button>
+                )}
+              </div>
+              <div className={`pick-path ${tePath ? '' : 'dim'}`} title={tePath}>
+                {tePath || '未选择（用底模自带编码器；Anima 自动探测同目录 qwen3）'}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -796,11 +890,29 @@ export function RecipeForm(props: { onCreated: (runId: string) => void }) {
           </div>
         </div>
 
-        {FORM_SECTIONS.map((sec) => (
+        {full && (
+          <div className="form-sec">
+            <h4>全量微调（输出完整模型，显存需求高）</h4>
+            <div className="form-grid">
+              <FieldInput
+                field={{
+                  key: 'train_text_encoder',
+                  label: '同时训练文本编码器',
+                  hint: '勾选后 TE 一起微调（需已选文本编码器）；显存占用大幅上升。',
+                  kind: 'bool',
+                }}
+                value={data.train_text_encoder}
+                onChange={(v) => setField('train_text_encoder', v)}
+              />
+            </div>
+          </div>
+        )}
+
+        {sections.map((sec) => (
           <div key={sec.title} className="form-sec">
             <h4>{sec.title}</h4>
             <div className="form-grid">
-              {sec.fields
+              {visibleFields(sec)
                 .filter((f) => !f.sdxlOnly || family === 'sdxl1')
                 .map((f) => (
                   <FieldInput key={f.key} field={f} value={data[f.key]} onChange={(v) => setField(f.key, v)} />

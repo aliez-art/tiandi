@@ -19,10 +19,11 @@ pub fn spawn(state: AppState) {
     let mut rx = state.bus.subscribe();
     let store = state.store.clone();
     let runs_dir = state.trainer.runs_dir().to_path_buf();
+    let output_root = crate::output_root(&runs_dir);
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(ev) => handle_event(&store, &state.bus, &runs_dir, ev).await,
+                Ok(ev) => handle_event(&store, &state.bus, &runs_dir, &output_root, ev).await,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
@@ -35,6 +36,7 @@ async fn handle_event(
     store: &Arc<Mutex<tiandi_state::Store>>,
     bus: &tiandi_core::EventBus,
     runs_dir: &Path,
+    output_root: &Path,
     ev: Event,
 ) {
     let run_id = match ev_run_id(&ev) {
@@ -67,14 +69,14 @@ async fn handle_event(
             });
         }
         Event::Sample { path, .. } => {
-            // 真实内核未出图前（mock 不产图），生成渐变占位图供画廊展示
-            let abs = abs_sample_path(runs_dir, path);
+            // 采样图：绝对路径直接使用；相对路径按 output 根解析（产物根）
+            let abs = abs_output_path(output_root, path);
             if let Some(abs) = &abs {
                 if !abs.exists() {
                     let _ = gen_placeholder_sample(abs, sample_step_hint(path));
                 }
             }
-            let rel = rel_runs_path(runs_dir, &abs.unwrap_or_else(|| PathBuf::from(path)));
+            let rel = rel_output_path(output_root, &abs.unwrap_or_else(|| PathBuf::from(path)));
             let _ = store.insert_checkpoint(&tiandi_core::Checkpoint {
                 id: uuid::Uuid::new_v4().to_string(),
                 run_id: run_id.clone(),
@@ -100,8 +102,8 @@ async fn handle_event(
         }
         Event::Done { .. } => {
             if !run.state.is_terminal() {
-                // 训练完成：扫描 checkpoints 目录，把 LoRA 产物入库（药库）
-                scan_lora_artifacts(&store, runs_dir, &run_id);
+                // 训练完成：扫描产物目录（output/<id>），把 LoRA 产物入库（药库）
+                scan_lora_artifacts(&store, output_root, &run_id);
                 advance(&mut store, bus, &run_id, run.state, RunState::Done).await;
             }
         }
@@ -113,19 +115,19 @@ async fn handle_event(
     }
 }
 
-/// 采样图绝对路径（内核可能给绝对或相对 runs 根路径）。
-fn abs_sample_path(runs_dir: &Path, path: &str) -> Option<PathBuf> {
+/// 采样图绝对路径（内核可能给绝对路径或相对 output 根路径）。
+fn abs_output_path(output_root: &Path, path: &str) -> Option<PathBuf> {
     let p = PathBuf::from(path);
     if p.is_absolute() {
         Some(p)
     } else {
-        Some(runs_dir.join(p))
+        Some(output_root.join(p))
     }
 }
 
-/// 相对 runs 根的路径（入库/URL 用）。
-fn rel_runs_path(runs_dir: &Path, abs: &Path) -> String {
-    abs.strip_prefix(runs_dir)
+/// 相对 output 根的路径（入库/URL 用）。
+fn rel_output_path(output_root: &Path, abs: &Path) -> String {
+    abs.strip_prefix(output_root)
         .unwrap_or(abs)
         .to_string_lossy()
         .replace('\\', "/")
@@ -178,14 +180,14 @@ fn hue_to_rgb(h: f32, t: f32) -> u8 {
     ((r + m) * 255.0) as u8
 }
 
-/// 扫描 runs/<id>/checkpoints 下的 LoRA 产物（*.safetensors，递归；ai-toolkit
-/// 后端产物在 <name>/ 子目录）入库。
+/// 扫描产物根下 runs 的 checkpoints（*.safetensors，递归；ai-toolkit
+/// 后端产物在 <name>/ 子目录）入库。产物路径相对 output 根。
 fn scan_lora_artifacts(
     store: &tokio::sync::MutexGuard<'_, tiandi_state::Store>,
-    runs_dir: &Path,
+    output_root: &Path,
     run_id: &str,
 ) {
-    let ckpts = runs_dir.join(run_id).join("checkpoints");
+    let ckpts = output_root.join(run_id);
     let mut files: Vec<PathBuf> = Vec::new();
     let mut stack = vec![ckpts];
     while let Some(dir) = stack.pop() {
@@ -195,6 +197,10 @@ fn scan_lora_artifacts(
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                // 跳过样本子目录（示例图是 kind=sample 由事件入库）
+                if path.file_name().and_then(|n| n.to_str()) == Some("samples") {
+                    continue;
+                }
                 stack.push(path);
             } else if path
                 .extension()
@@ -208,7 +214,7 @@ fn scan_lora_artifacts(
     for path in files {
         // 已入库则跳过（幂等）
         let rel = path
-            .strip_prefix(runs_dir)
+            .strip_prefix(output_root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
@@ -332,6 +338,7 @@ mod tests {
             &st.store,
             &st.bus,
             &std::env::temp_dir(),
+            &std::env::temp_dir(),
             Event::Hello {
                 run_id: run.id.clone(),
                 backend: "test".into(),
@@ -347,6 +354,7 @@ mod tests {
         handle_event(
             &st.store,
             &st.bus,
+            &std::env::temp_dir(),
             &std::env::temp_dir(),
             Event::Progress {
                 run_id: run.id.clone(),
@@ -378,6 +386,7 @@ mod tests {
             &st.store,
             &st.bus,
             &std::env::temp_dir(),
+            &std::env::temp_dir(),
             Event::Metric {
                 run_id: run.id.clone(),
                 step: 3,
@@ -389,6 +398,7 @@ mod tests {
         handle_event(
             &st.store,
             &st.bus,
+            &std::env::temp_dir(),
             &std::env::temp_dir(),
             Event::Done {
                 run_id: run.id.clone(),
@@ -419,6 +429,7 @@ mod tests {
             &st.store,
             &st.bus,
             &runs_dir,
+            &runs_dir,
             Event::Sample {
                 run_id: run.id.clone(),
                 path: sample_abs.to_string_lossy().into_owned(),
@@ -432,6 +443,7 @@ mod tests {
         handle_event(
             &st.store,
             &st.bus,
+            &runs_dir,
             &runs_dir,
             Event::Log {
                 run_id: run.id.clone(),
@@ -455,3 +467,4 @@ mod tests {
         );
     }
 }
+

@@ -19,7 +19,7 @@ use tiandi_recipe::RecipeData;
 use crate::kernel::{
     publish_event, spawn_kernel, KernelEnv, KernelHandle, KernelLaunch, KernelMode,
 };
-use crate::toml_map::{build_sdscripts_toml, TrainPaths};
+use crate::toml_map::{build_sdscripts_toml, build_sdscripts_toml_full, TrainPaths};
 use crate::yaml_map::{build_aitk_yaml, AitkPaths};
 
 /// SdScripts 后端训练器：驱动 Python 内核（真实 sd-scripts 或 mock）。
@@ -103,11 +103,11 @@ impl SdScriptsTrainer {
                 })?
         };
 
-        // 任务目录
+        // 任务目录：日志/配置留在 runs/<id>；产物（LoRA/示例图）在 job.output_dir（output/<id>）
         let run_dir = self.runs_dir.join(&job.run_id);
         let logs_dir = run_dir.join("logs");
-        let samples_dir = run_dir.join("samples");
-        let checkpoints_dir = run_dir.join("checkpoints");
+        let samples_dir = std::path::PathBuf::from(&job.output_dir).join("samples");
+        let checkpoints_dir = std::path::PathBuf::from(&job.output_dir).join("checkpoints");
         for d in [&run_dir, &logs_dir, &samples_dir, &checkpoints_dir] {
             std::fs::create_dir_all(d)
                 .map_err(|e| EngineError::Spawn(format!("创建任务目录失败：{e}")))?;
@@ -126,6 +126,17 @@ impl SdScriptsTrainer {
         } else if mode == KernelMode::Aitk {
             let recipe: RecipeData = serde_json::from_value(job.params.clone())
                 .map_err(|e| EngineError::Spawn(format!("丹方参数解析失败：{e}")))?;
+            // 全量训练暂不支持 ai-toolkit（Krea 2）
+            if job
+                .params
+                .get("full_finetune")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return Err(EngineError::Spawn(
+                    "Krea 2 全量训练暂不支持（ai-toolkit 后端仅 LoRA）".into(),
+                ));
+            }
             let aitk = self
                 .env
                 .aitk
@@ -144,7 +155,7 @@ impl SdScriptsTrainer {
             let paths = AitkPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
-                training_folder: run_dir.join("checkpoints").to_string_lossy().into_owned(),
+                training_folder: std::path::PathBuf::from(&job.output_dir).join("checkpoints").to_string_lossy().into_owned(),
                 output_name: job
                     .output_name
                     .clone()
@@ -160,9 +171,23 @@ impl SdScriptsTrainer {
         } else {
             let recipe: RecipeData = serde_json::from_value(job.params.clone())
                 .map_err(|e| EngineError::Spawn(format!("丹方参数解析失败：{e}")))?;
+            // 丹方可选指定 VAE / TE（data.vae_path / data.te_path 自定义键）
+            let vae_override = job
+                .params
+                .get("vae_path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let te_override = job
+                .params
+                .get("te_path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             // 本地 tokenizer（离线化：<workspace>/tokenizers/{clip-l,clip-g}）
             let (tokenizer, tokenizer2) = self.local_tokenizers();
             // Anima 家族：qwen3 TE / VAE 与基底模型同目录探测；T5 分词器用内核自带
+            // （丹方指定 VAE/TE 时优先）
             let (anima_qwen3, anima_vae, anima_t5_tokenizer) =
                 if job.family == tiandi_core::ModelFamily::DitAnima {
                     let base_dir = job
@@ -181,8 +206,12 @@ impl SdScriptsTrainer {
                         .map(|s| s.join("configs/t5_old"))
                         .filter(|p| p.is_dir());
                     (
-                        qwen3.exists().then(|| qwen3.to_string_lossy().into_owned()),
-                        vae.exists().then(|| vae.to_string_lossy().into_owned()),
+                        te_override
+                            .clone()
+                            .or_else(|| qwen3.exists().then(|| qwen3.to_string_lossy().into_owned())),
+                        vae_override
+                            .clone()
+                            .or_else(|| vae.exists().then(|| vae.to_string_lossy().into_owned())),
                         t5.map(|p| p.to_string_lossy().into_owned()),
                     )
                 } else {
@@ -191,7 +220,7 @@ impl SdScriptsTrainer {
             let paths = TrainPaths {
                 base_model: job.base_model.clone().unwrap_or_default(),
                 dataset_dir: job.dataset_dir.clone(),
-                output_dir: run_dir.join("checkpoints").to_string_lossy().into_owned(),
+                output_dir: std::path::PathBuf::from(&job.output_dir).join("checkpoints").to_string_lossy().into_owned(),
                 output_name: job
                     .output_name
                     .clone()
@@ -206,7 +235,22 @@ impl SdScriptsTrainer {
                 anima_t5_tokenizer,
                 anima_qwen3_tokenizer: None,
             };
-            let toml = build_sdscripts_toml(&recipe, job.family, &paths);
+            // 全量微调（full_finetune=true）：无 LoRA 网络段，输出完整 checkpoint
+            let full = job
+                .params
+                .get("full_finetune")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let train_te = job
+                .params
+                .get("train_text_encoder")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let toml = if full {
+                build_sdscripts_toml_full(&recipe, job.family, &paths, train_te)
+            } else {
+                build_sdscripts_toml(&recipe, job.family, &paths)
+            };
             std::fs::write(&config_path, toml)
                 .map_err(|e| EngineError::Spawn(format!("写训练配置失败：{e}")))?;
         }
@@ -225,10 +269,18 @@ impl SdScriptsTrainer {
         ];
         env.extend(job.env.iter().cloned());
         if mode == KernelMode::SdScripts {
-            let script = match job.family {
-                tiandi_core::ModelFamily::Sdxl1 => "sdxl_train_network.py",
-                tiandi_core::ModelFamily::DitAnima => "anima_train_network.py",
-                tiandi_core::ModelFamily::DitKrea2 => "krea2_train_network.py",
+            // 全量微调 → sdxl_train.py / anima_train.py；LoRA → *_train_network.py
+            let full = job
+                .params
+                .get("full_finetune")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let script = match (job.family, full) {
+                (tiandi_core::ModelFamily::Sdxl1, true) => "sdxl_train.py",
+                (tiandi_core::ModelFamily::DitAnima, true) => "anima_train.py",
+                (tiandi_core::ModelFamily::Sdxl1, false) => "sdxl_train_network.py",
+                (tiandi_core::ModelFamily::DitAnima, false) => "anima_train_network.py",
+                (tiandi_core::ModelFamily::DitKrea2, _) => "krea2_train_network.py",
             };
             env.push(("TIANDI_TRAIN_SCRIPT".into(), script.into()));
         }
@@ -377,3 +429,5 @@ impl Trainer for SdScriptsTrainer {
         Ok(None)
     }
 }
+
+

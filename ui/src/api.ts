@@ -36,9 +36,9 @@ export interface MetricPoint {
   lr: number | null
 }
 
-/** 采样图/产物 URL（runs 静态服务，/runs/ 前缀）。 */
+/** 示例图/产物 URL（output 静态服务，/output/ 前缀）。 */
 export function assetUrl(path: string): string {
-  return `${base()}/runs/${path}`
+  return `${base()}/output/${path}`
 }
 
 let apiBase: string | null = null
@@ -327,6 +327,21 @@ export async function pickDir(): Promise<string | null> {
   const res = await fetch(`${base()}/api/pick-dir`, { method: 'POST' })
   if (!res.ok) throw new Error(`pick dir ${res.status}`)
   const j = (await res.json()) as { path: string | null }
+  return j.path
+}
+
+/** 资产导入到工作区 models 目录（base_model / vae / clip），返回正式路径。 */
+export async function importAsset(kind: 'base_model' | 'vae' | 'clip', path: string): Promise<string> {
+  const res = await fetch(`${base()}/api/import-asset`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind, path }),
+  })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(err?.error ?? `import asset ${res.status}`)
+  }
+  const j = (await res.json()) as { path: string }
   return j.path
 }
 

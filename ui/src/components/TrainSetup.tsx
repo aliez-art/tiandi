@@ -582,6 +582,8 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
         const imported = await importAsset('base_model', path)
         setModelPath(imported)
         showMsg(`已选底模：${imported}`)
+      } else {
+        showMsg('未选择文件（已取消）')
       }
     } catch (e) {
       showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)
@@ -632,6 +634,8 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
       if (dir) {
         setDatasetDir(dir)
         showMsg(`已选数据集：${dir}`)
+      } else {
+        showMsg('未选择目录（已取消）')
       }
     } catch (e) {
       showMsg(`选择失败：${e instanceof Error ? e.message : String(e)}`, true)

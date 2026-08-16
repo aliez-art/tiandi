@@ -158,7 +158,7 @@ mod dialog_owner {
                 0,
                 class.as_ptr(),
                 class.as_ptr(),
-                0, // 隐藏
+                0, // 先隐藏创建
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 0,
@@ -171,6 +171,18 @@ mod dialog_owner {
             if hwnd.is_null() {
                 return None;
             }
+            // 显示但不激活（SW_SHOWNA）+ 置顶位序：让 IFileDialog 以本窗口为 owner
+            // 弹出时能正常前台激活（避免对话框在后台/任务栏闪烁而用户看不到）。
+            ShowWindow(hwnd, SW_SHOWNA);
+            SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
             Some((WinHandle(hwnd), hwnd))
         }
     }
@@ -180,6 +192,15 @@ mod dialog_owner {
             DestroyWindow(hwnd);
         }
     }
+
+    /// 提升本进程前台激活机会：允许任意进程把前台让给我们（配合 SetForegroundWindow），
+    /// 避免模态对话框在后台弹出（用户只看到任务栏闪烁）。
+    pub fn prepare_foreground(hwnd: HWND) {
+        unsafe {
+            AllowSetForegroundWindow(ASFW_ANY);
+            SetForegroundWindow(hwnd);
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -187,56 +208,48 @@ struct PickResult {
     path: Option<String>,
 }
 
-/// 弹出系统文件选择框（阻塞调用，放 blocking 池）；取消返回 path=null。
-async fn pick_file() -> Json<PickResult> {
-    let picked = tokio::task::spawn_blocking(|| {
-        #[cfg(windows)]
-        let owner = dialog_owner::create();
-        let mut dlg = rfd::FileDialog::new()
-            .set_title("选择基底模型")
-            .add_filter("模型文件", &["safetensors"]);
-        #[cfg(windows)]
-        if let Some((h, _)) = &owner {
-            dlg = dlg.set_parent(h);
-        }
-        let picked = dlg.pick_file();
-        #[cfg(windows)]
-        if let Some((_, hwnd)) = owner {
-            dialog_owner::destroy(hwnd);
-        }
-        picked
-    })
-    .await
-    .ok()
-    .flatten();
-    Json(PickResult {
-        path: picked.map(|p| p.to_string_lossy().into_owned()),
-    })
+/// 弹出系统文件选择框（阻塞调用，放 blocking 池；5 分钟超时兜底）。
+async fn pick_file() -> Result<Json<PickResult>, ApiError> {
+    let picked = pick_with_timeout("选择基底模型", true).await?;
+    Ok(Json(PickResult { path: picked }))
 }
 
 /// 弹出系统目录选择框（数据集目录）。
-async fn pick_dir() -> Json<PickResult> {
-    let picked = tokio::task::spawn_blocking(|| {
-        #[cfg(windows)]
-        let owner = dialog_owner::create();
-        let mut dlg = rfd::FileDialog::new().set_title("选择数据集目录");
-        #[cfg(windows)]
-        if let Some((h, _)) = &owner {
-            dlg = dlg.set_parent(h);
-        }
-        let picked = dlg.pick_folder();
-        #[cfg(windows)]
-        if let Some((_, hwnd)) = owner {
-            dialog_owner::destroy(hwnd);
-        }
-        picked
-    })
+async fn pick_dir() -> Result<Json<PickResult>, ApiError> {
+    let picked = pick_with_timeout("选择数据集目录", false).await?;
+    Ok(Json(PickResult { path: picked }))
+}
+
+/// rfd 原生对话框统一入口：Windows 下带隐藏 owner 窗口 + 前台激活；
+/// 5 分钟超时兜底（对话框异常挂起时不让 HTTP 请求永久阻塞）。
+async fn pick_with_timeout(title: &'static str, file: bool) -> Result<Option<String>, ApiError> {
+    let picked = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::task::spawn_blocking(move || {
+            #[cfg(windows)]
+            let owner = dialog_owner::create();
+            let mut dlg = rfd::FileDialog::new().set_title(title);
+            if file {
+                dlg = dlg.add_filter("模型文件", &["safetensors"]);
+            }
+            #[cfg(windows)]
+            if let Some((h, hwnd)) = &owner {
+                dialog_owner::prepare_foreground(*hwnd);
+                dlg = dlg.set_parent(h);
+            }
+            let picked = if file { dlg.pick_file() } else { dlg.pick_folder() };
+            #[cfg(windows)]
+            if let Some((_, hwnd)) = owner {
+                dialog_owner::destroy(hwnd);
+            }
+            picked
+        }),
+    )
     .await
+    .map_err(|_| ApiError::Internal("文件选择超时（对话框 5 分钟无响应）".into()))?
     .ok()
     .flatten();
-    Json(PickResult {
-        path: picked.map(|p| p.to_string_lossy().into_owned()),
-    })
+    Ok(picked.map(|p| p.to_string_lossy().into_owned()))
 }
 
 // ---------- 系统信息 ----------

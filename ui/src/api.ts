@@ -273,9 +273,12 @@ export async function deleteRun(runId: string): Promise<void> {
   }
 }
 
-/** 弹出系统文件对话框（后端 rfd 原生对话框）；取消返回 null。 */
+/** 弹出系统文件对话框（后端 rfd 原生对话框）；取消返回 null。5 分钟超时兜底。 */
 export async function pickFile(): Promise<string | null> {
-  const res = await fetch(`${base()}/api/pick-file`, { method: 'POST' })
+  const res = await fetch(`${base()}/api/pick-file`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(300_000),
+  })
   if (!res.ok) throw new Error(`pick file ${res.status}`)
   const j = (await res.json()) as { path: string | null }
   return j.path
@@ -283,7 +286,10 @@ export async function pickFile(): Promise<string | null> {
 
 /** 弹出系统目录对话框；取消返回 null。 */
 export async function pickDir(): Promise<string | null> {
-  const res = await fetch(`${base()}/api/pick-dir`, { method: 'POST' })
+  const res = await fetch(`${base()}/api/pick-dir`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(300_000),
+  })
   if (!res.ok) throw new Error(`pick dir ${res.status}`)
   const j = (await res.json()) as { path: string | null }
   return j.path

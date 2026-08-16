@@ -51,7 +51,7 @@
 
 **目标**：Krea 2 内核接入 + 打标完善 + 自动化。
 
-- [ ] Krea 2：许可调研结论落地 → `BackendAiToolkit`（YAML 生成 + run.py 调用 + krea2 arch 参数映射 + 协议适配层复用）
+- [x] Krea 2：许可调研结论落地（Krea 2 Community License：允许个人训练/分发 Derivative，年营收 <$1M 可商用）→ `BackendAiToolkit`（ai-toolkit 后端）全链路打通——**真实 Krea 2 LoRA 训练成功**（krea2_raw_bf16 + qwen3vl_4b + qwen_image_vae 全离线；MMDiT 430/430、VAE 194/194、tokenizer 151936 本地化；run 00873e71 queued→done，3 指标点，LoRA 54.5MB 入药库）
 - [ ] 打标完善：WD14/CL/Florence 多模型管理、进度流、失败不阻塞（经 Python 内核）
 - [ ] 自动化 CLI：`tiandi run recipe.toml` 无人值守全流程（A 的虚拟队列思路落地）
 - [ ] latent 缓存管理：Rust 侧管理内核产出的缓存目录（同数据集多任务共享、哈希校验）

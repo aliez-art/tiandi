@@ -55,3 +55,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# ai-toolkit 缓存（落在数据集目录）
+.aitk_size.json

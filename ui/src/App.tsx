@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   createSimulatedRun,
+  deleteRun,
   discoverBase,
   fetchHealth,
   fetchSystem,
@@ -132,6 +133,17 @@ export default function App() {
 
   const selectedRun = runs.find((r) => r.id === selected) ?? null
 
+  const onDeleteRun = async (run: Run) => {
+    if (!window.confirm(`删除任务 ${run.id.slice(0, 8)}？\n将同时删除其日志、产物与采样图（不可恢复）。`)) return
+    try {
+      await deleteRun(run.id)
+      setSelected((prev) => (prev === run.id ? null : prev))
+      await refreshRuns()
+    } catch (e) {
+      alert(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -212,6 +224,18 @@ export default function App() {
                     <span className="run-time">
                       {new Date(r.created_at).toLocaleTimeString()}
                     </span>
+                    {r.state === 'done' || r.state === 'failed' || r.state === 'canceled' ? (
+                      <button
+                        className="run-del"
+                        title="删除任务（含产物）"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void onDeleteRun(r)
+                        }}
+                      >
+                        ✕
+                      </button>
+                    ) : null}
                   </li>
                 ))}
               </ul>

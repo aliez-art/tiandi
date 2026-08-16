@@ -62,7 +62,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/runs", get(list_runs).post(create_run))
-        .route("/api/runs/{id}", get(get_run))
+        .route("/api/runs/{id}", get(get_run).delete(delete_run))
         .route("/api/runs/{id}/start", post(start_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/runs/{id}/transition", post(transition_run))
@@ -226,6 +226,30 @@ async fn get_run(
 ) -> Result<Json<Run>, ApiError> {
     let store = state.store.lock().await;
     Ok(Json(store.get_run(&id)?))
+}
+
+/// `DELETE /api/runs/{id}`：删除已结束（出炉/炸炉/已取消）的任务记录与产物。
+/// 运行中的任务拒绝删除。
+async fn delete_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let store = state.store.lock().await;
+    let run = store.get_run(&id)?;
+    if !run.state.is_terminal() {
+        return Err(ApiError::Conflict(format!(
+            "任务状态 {} 未结束，不能删除（可先熄灭）",
+            run.state.label()
+        )));
+    }
+    store.delete_run(&id)?;
+    drop(store);
+    // 删除任务目录（配置/日志/产物/采样）
+    let dir = state.trainer.runs_dir().join(&id);
+    if dir.exists() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

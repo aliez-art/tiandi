@@ -363,6 +363,22 @@ impl Store {
         Ok(())
     }
 
+    /// 删除任务记录及关联指标/产物索引（不存在则 NotFound）。
+    pub fn delete_run(&self, id: &str) -> Result<(), RepoError> {
+        self.conn
+            .execute("DELETE FROM metrics WHERE run_id = ?1", [id])?;
+        self.conn
+            .execute("DELETE FROM checkpoints WHERE run_id = ?1", [id])?;
+        let n = self.conn.execute("DELETE FROM runs WHERE id = ?1", [id])?;
+        if n == 0 {
+            return Err(RepoError::NotFound {
+                entity: "run",
+                id: id.into(),
+            });
+        }
+        Ok(())
+    }
+
     // ---- Run ----
 
     pub fn insert_run(&self, r: &Run) -> Result<(), RepoError> {

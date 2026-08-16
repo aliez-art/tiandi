@@ -303,3 +303,11 @@ export async function cancelRun(runId: string): Promise<Run> {
   if (!res.ok) throw new Error(`cancel run ${res.status}`)
   return res.json()
 }
+
+export async function deleteRun(runId: string): Promise<void> {
+  const res = await fetch(`${base()}/api/runs/${runId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(err?.error ?? `delete run ${res.status}`)
+  }
+}

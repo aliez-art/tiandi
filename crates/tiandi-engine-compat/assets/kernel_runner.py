@@ -435,7 +435,7 @@ def main() -> None:
     config_path = sys.argv[1]
     mode = "mock" if "--mock" in sys.argv else os.environ.get("TIANDI_KERNEL_MODE", "sdscripts")
     run_id = os.environ.get("TIANDI_RUN_ID", "")
-    emit({"type": "hello", "run_id": run_id, "backend": "kernel-runner", "version": "0.1.0", "mode": mode})
+    emit({"type": "hello", "run_id": run_id, "backend": "kernel-runner", "version": "0.2.0", "mode": mode})
     log(f"内核适配层启动（mode={mode}，python={sys.version.split()[0]}）")
     try:
         if mode == "mock":

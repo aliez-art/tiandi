@@ -21,14 +21,28 @@ if not exist "%EXE%" (
     exit /b 1
 )
 
-REM ---------- 2. 检查工作区 ----------
+REM ---------- 1.5 发布版 UI 目录（覆盖编译路径推导，发布包必需） ----------
+if exist "%~dp0ui\dist" set "TIANDI_UI_DIR=%~dp0ui\dist"
+
+REM ---------- 2. 检查工作区（不存在则首次自动初始化） ----------
 set "WS=%~dp0.kernel-ws"
 if not exist "%WS%\tiandi.db" (
-    echo [提示] 未找到工作区数据库 .kernel-ws\tiandi.db
-    echo   首次使用请执行：tiandi init .kernel-ws
-    echo.
-    pause
-    exit /b 1
+    if not exist "%WS%" (
+        echo [提示] 未找到工作区，正在自动初始化 .kernel-ws ...
+        "%EXE%" init "%WS%"
+        if errorlevel 1 (
+            echo [错误] 工作区初始化失败
+            echo.
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo [错误] 工作区目录 .kernel-ws 存在但没有数据库 tiandi.db
+        echo   请检查后重试，或删除 .kernel-ws 让本脚本重新初始化
+        echo.
+        pause
+        exit /b 1
+    )
 )
 
 REM ---------- 3. 端口占用提示 ----------

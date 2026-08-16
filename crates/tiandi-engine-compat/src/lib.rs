@@ -460,7 +460,7 @@ impl Trainer for SdScriptsTrainer {
     fn info(&self) -> EngineInfo {
         EngineInfo {
             backend: "sd-scripts (kernel_runner)".into(),
-            version: "0.1.0".into(),
+            version: "0.2.0".into(),
             capabilities: vec!["ipc-jsonlines-v1".into(), "mock".into(), "sdxl-toml".into()],
         }
     }

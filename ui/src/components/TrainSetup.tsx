@@ -66,7 +66,10 @@ const PREDICTIONS: [string, string][] = [
 type FieldDef = {
   key: string
   label: string
+  /** 悬停在 "?" 上显示的参数说明 */
   hint: string
+  /** 输入框示例值（placeholder） */
+  placeholder?: string
   kind: 'num' | 'text' | 'select' | 'bool' | 'textlist'
   step?: string
   options?: [string, string][]
@@ -74,15 +77,16 @@ type FieldDef = {
   sdxlOnly?: boolean
 }
 
-/** 完整训练参数表单（参考 kohya_ss / lora-scripts GUI 分区）。 */
+/** 训练参数表单：按用途分组、每组内按使用频率排序；悬停 "?" 查看说明。 */
 const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
   {
-    title: '概念与预测',
+    title: '数据与概念',
     fields: [
       {
         key: 'trigger_word',
         label: '触发词',
         hint: '训练概念名（如 k2test）。推理时用它唤起 LoRA；可留空。',
+        placeholder: '如 mychar, mystyle',
         kind: 'text',
       },
       {
@@ -92,121 +96,11 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'select',
         options: PREDICTIONS,
       },
-    ],
-  },
-  {
-    title: '学习率与优化器',
-    fields: [
-      {
-        key: 'learning_rate',
-        label: '学习率',
-        hint: '常规 1e-4；概念难学可试 2e-4~5e-4；过低学不动，过高学崩。',
-        kind: 'num',
-        step: 'any',
-      },
-      {
-        key: 'text_encoder_lr',
-        label: '文本编码器学习率',
-        hint: 'TE 学习率；留空 = 跟随主学习率；缓存 TE 输出时自动为 0（SDXL 常用 5e-5）。',
-        kind: 'num',
-        step: 'any',
-      },
-      {
-        key: 'unet_lr',
-        label: 'UNet 学习率',
-        hint: '仅 UNet 的学习率；留空 = 跟随主学习率。',
-        kind: 'num',
-        step: 'any',
-      },
-      { key: 'optimizer', label: '优化器', hint: 'AdamW8bit 兼容性最好。', kind: 'select', options: OPTIMIZERS },
-      {
-        key: 'lr_scheduler',
-        label: '学习率调度',
-        hint: 'cosine 常规；短训用 constant_with_warmup。',
-        kind: 'select',
-        options: SCHEDULERS,
-      },
-      {
-        key: 'lr_warmup_ratio',
-        label: '预热比例',
-        hint: '前 N% 步学习率线性升温（0.05~0.1 常见）。',
-        kind: 'num',
-        step: 'any',
-      },
-    ],
-  },
-  {
-    title: '网络结构',
-    fields: [
-      { key: 'network_type', label: '网络类型', hint: 'LoRA 最通用；DoRA 效果更稳但更慢。', kind: 'select', options: NETWORKS },
-      {
-        key: 'network_dim',
-        label: '维度 dim（rank）',
-        hint: 'LoRA 秩。角色/风格 16~64；Krea 2 建议 32；过大学过拟合。',
-        kind: 'num',
-      },
-      {
-        key: 'network_alpha',
-        label: 'Alpha',
-        hint: '缩放系数；常与 dim 相等（Krea 2 建议 alpha = rank）。',
-        kind: 'num',
-      },
-      {
-        key: 'network_dropout',
-        label: '网络 Dropout',
-        hint: '权重随机丢弃比例（0~1）。防过拟合，0.05~0.1 可试；默认关闭。',
-        kind: 'num',
-        step: 'any',
-      },
-      {
-        key: 'rank_dropout',
-        label: 'Rank Dropout',
-        hint: '行级丢弃（0~1）；与 network_dropout 类似，作用于 rank 维度。',
-        kind: 'num',
-        step: 'any',
-      },
-      {
-        key: 'module_dropout',
-        label: 'Module Dropout',
-        hint: '模块级丢弃（0~1）；按模块整体丢弃，更强正则。',
-        kind: 'num',
-        step: 'any',
-      },
-      {
-        key: 'conv_dim',
-        label: '卷积维度（LoCon/LoHa/LoKr）',
-        hint: '卷积层 rank；用 LoCon/LoHa/LoKr 时设置，常与 dim 相同。',
-        kind: 'num',
-      },
-      {
-        key: 'conv_alpha',
-        label: '卷积 Alpha',
-        hint: '卷积层 alpha；常与 conv_dim 相等。',
-        kind: 'num',
-      },
-      {
-        key: 'block_weights',
-        label: 'Block 权重（SDXL）',
-        hint: '25 个逗号分隔值（0/1），强化 UNet 指定层，如 0,...,1,1,1,1,1,...,1。仅 SDXL 族。',
-        kind: 'text',
-        sdxlOnly: true,
-      },
-    ],
-  },
-  {
-    title: '数据集',
-    fields: [
-      { key: 'batch_size', label: '批大小', hint: '1 通常足够；>1 需更大显存。', kind: 'num' },
-      {
-        key: 'num_repeats',
-        label: '每张图重复次数',
-        hint: '每张图重复 N 次（等效放大步数/训练量）；小数据集常用 5~10。',
-        kind: 'num',
-      },
       {
         key: 'resolution',
         label: '分辨率',
         hint: 'SDXL / Anima / Krea 2 用 1024；图小可降（如 768）。',
+        placeholder: '1024',
         kind: 'num',
       },
       {
@@ -216,9 +110,17 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         kind: 'bool',
       },
       {
+        key: 'batch_size',
+        label: '批大小',
+        hint: '1 通常足够；>1 需更大显存。',
+        placeholder: '1',
+        kind: 'num',
+      },
+      {
         key: 'keep_tokens',
         label: '保留开头标签数',
         hint: '打乱标签时保留前 N 个（通常是触发词/角色名）。',
+        placeholder: '1',
         kind: 'num',
       },
       {
@@ -231,30 +133,157 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'caption_dropout_rate',
         label: '标签丢弃率',
         hint: '随机丢弃描述的比例（0.05 常规；0 = 从不丢弃）。',
+        placeholder: '0.05',
         kind: 'num',
         step: 'any',
       },
     ],
   },
   {
-    title: '训练设置',
+    title: '网络结构',
+    fields: [
+      {
+        key: 'network_type',
+        label: '网络类型',
+        hint: 'LoRA 最通用；DoRA 效果更稳但更慢；LoCon/LoHa/LoKr 需配合卷积维度。',
+        kind: 'select',
+        options: NETWORKS,
+      },
+      {
+        key: 'network_dim',
+        label: '维度 dim（rank）',
+        hint: 'LoRA 秩。角色/风格 16~64；Krea 2 建议 32；过大学过拟合。',
+        placeholder: '16',
+        kind: 'num',
+      },
+      {
+        key: 'network_alpha',
+        label: 'Alpha',
+        hint: '缩放系数；常与 dim 相等（Krea 2 建议 alpha = rank）。',
+        placeholder: '16',
+        kind: 'num',
+      },
+      {
+        key: 'conv_dim',
+        label: '卷积维度（LoCon/LoHa/LoKr）',
+        hint: '卷积层 rank；用 LoCon/LoHa/LoKr 时设置，常与 dim 相同。',
+        placeholder: '16',
+        kind: 'num',
+      },
+      {
+        key: 'conv_alpha',
+        label: '卷积 Alpha',
+        hint: '卷积层 alpha；常与 conv_dim 相等。',
+        placeholder: '16',
+        kind: 'num',
+      },
+      {
+        key: 'network_dropout',
+        label: '网络 Dropout',
+        hint: '权重随机丢弃比例（0~1）。防过拟合，0.05~0.1 可试；默认关闭。',
+        placeholder: '0.05',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'rank_dropout',
+        label: 'Rank Dropout',
+        hint: '行级丢弃（0~1）；与 network_dropout 类似，作用于 rank 维度。',
+        placeholder: '0.05',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'module_dropout',
+        label: 'Module Dropout',
+        hint: '模块级丢弃（0~1）；按模块整体丢弃，更强正则。',
+        placeholder: '0.05',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'block_weights',
+        label: 'Block 权重（SDXL）',
+        hint: '25 个逗号分隔值（0/1），强化 UNet 指定层，如 0,...,1,1,1,1,1,...,1。仅 SDXL 族。',
+        placeholder: '0,0,0,...,1,1,1,1,1,...,0',
+        kind: 'text',
+        sdxlOnly: true,
+      },
+    ],
+  },
+  {
+    title: '优化器与学习率',
+    fields: [
+      {
+        key: 'optimizer',
+        label: '优化器',
+        hint: 'AdamW8bit 兼容性最好；Prodigy/CAME 可自适应学习率。',
+        kind: 'select',
+        options: OPTIMIZERS,
+      },
+      {
+        key: 'learning_rate',
+        label: '学习率',
+        hint: '常规 1e-4；概念难学可试 2e-4~5e-4；过低学不动，过高学崩。',
+        placeholder: '0.0001',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'text_encoder_lr',
+        label: '文本编码器学习率',
+        hint: 'TE 学习率；留空 = 跟随主学习率；缓存 TE 输出时自动为 0（SDXL 常用 5e-5）。',
+        placeholder: '0.00005',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'unet_lr',
+        label: 'UNet 学习率',
+        hint: '仅 UNet 的学习率；留空 = 跟随主学习率。',
+        placeholder: '0.0001',
+        kind: 'num',
+        step: 'any',
+      },
+      {
+        key: 'lr_scheduler',
+        label: '学习率调度',
+        hint: 'cosine 常规；短训用 constant_with_warmup。',
+        kind: 'select',
+        options: SCHEDULERS,
+      },
+      {
+        key: 'lr_warmup_ratio',
+        label: '预热比例',
+        hint: '前 N% 步学习率线性升温（0.05~0.1 常见）。',
+        placeholder: '0.1',
+        kind: 'num',
+        step: 'any',
+      },
+    ],
+  },
+  {
+    title: '训练控制',
     fields: [
       {
         key: 'max_train_epochs',
         label: '训练轮数',
         hint: '每轮 = 全部图片过一遍；小数据集可多轮，首次建议 1 轮试跑。',
+        placeholder: '10',
         kind: 'num',
       },
       {
         key: 'max_train_steps',
         label: '总步数上限',
         hint: '覆盖 epochs×图数×repeats 的自动估算；留空 = 自动。',
+        placeholder: '留空 = 自动',
         kind: 'num',
       },
       {
         key: 'gradient_accumulation_steps',
         label: '梯度累积',
         hint: '等效放大批大小（2 = 每 2 步更新一次参数）。',
+        placeholder: '1',
         kind: 'num',
       },
       {
@@ -267,32 +296,37 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'max_grad_norm',
         label: '梯度裁剪',
         hint: '防梯度爆炸（1.0 常规）。',
+        placeholder: '1.0',
         kind: 'num',
         step: 'any',
       },
-      { key: 'seed', label: '随机种子', hint: '固定随机性，便于复现。', kind: 'num' },
+      { key: 'seed', label: '随机种子', hint: '固定随机性，便于复现。', placeholder: '42', kind: 'num' },
       {
         key: 'clip_skip',
         label: 'CLIP 跳层',
         hint: '跳过 CLIP 最后 N 层输出（SDXL 系常用 1~2）；留空 = 默认。',
+        placeholder: '留空 = 默认',
         kind: 'num',
       },
       {
         key: 'max_token_length',
         label: '最大 Token 长度',
         hint: '75/150/225/300；长描述用 225+（需同时开启加权标签）。',
+        placeholder: '75',
         kind: 'num',
       },
       {
         key: 'min_timestep',
         label: '最小时间步',
         hint: '噪声范围裁剪下限（0 = 默认）；减小可加速但影响细节。',
+        placeholder: '0',
         kind: 'num',
       },
       {
         key: 'max_timestep',
         label: '最大时间步',
         hint: '噪声范围裁剪上限（1000 = 默认）；减小可加速但影响结构。',
+        placeholder: '1000',
         kind: 'num',
       },
       {
@@ -324,7 +358,13 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         hint: '把编码结果落盘，进一步省显存；首次较慢。',
         kind: 'bool',
       },
-      { key: 'mixed_precision', label: '混合精度', hint: 'bf16 常规；老显卡用 fp16。', kind: 'select', options: PRECISIONS },
+      {
+        key: 'mixed_precision',
+        label: '混合精度',
+        hint: 'bf16 常规；老显卡用 fp16。',
+        kind: 'select',
+        options: PRECISIONS,
+      },
     ],
   },
   {
@@ -334,6 +374,7 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'min_snr_gamma',
         label: 'Min-SNR Gamma',
         hint: '5.0 常规；抑制噪声步权重失衡，留空关闭。',
+        placeholder: '5.0',
         kind: 'num',
         step: 'any',
       },
@@ -341,6 +382,7 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'noise_offset',
         label: '噪声偏移',
         hint: '0.02~0.05 提升明暗对比表现；留空关闭。',
+        placeholder: '0.03',
         kind: 'num',
         step: 'any',
       },
@@ -348,6 +390,7 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'adaptive_noise_scale',
         label: '自适应噪声偏移',
         hint: 'noise_offset 进阶版（按时间步自适应）；0.1 左右可试。',
+        placeholder: '0.1',
         kind: 'num',
         step: 'any',
       },
@@ -355,12 +398,14 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'multires_noise_iterations',
         label: '多分辨率噪声迭代',
         hint: '在多个分辨率加噪再混合，提升大图结构（6~10 常见）；0 = 关闭。',
+        placeholder: '6',
         kind: 'num',
       },
       {
         key: 'multires_noise_discount',
         label: '多分辨率噪声折扣',
         hint: '多分辨率噪声的折扣系数（0.3 左右常见）。',
+        placeholder: '0.3',
         kind: 'num',
         step: 'any',
       },
@@ -373,12 +418,14 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'save_every_n_epochs',
         label: '保存间隔（轮）',
         hint: '每 N 轮存一个 LoRA 检查点（断点续训也依赖它）。',
+        placeholder: '1',
         kind: 'num',
       },
       {
         key: 'save_every_n_steps',
         label: '保存间隔（步）',
         hint: '每 N 步存一个检查点；留空 = 按轮保存。',
+        placeholder: '留空 = 按轮保存',
         kind: 'num',
       },
       {
@@ -391,30 +438,35 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'save_last_n_states',
         label: '保留最近状态数',
         hint: '最多保留几个状态目录（防磁盘膨胀）。',
+        placeholder: '3',
         kind: 'num',
       },
       {
         key: 'sample_every_n_epochs',
         label: '示例图间隔（轮）',
         hint: '每 N 轮生成一批示例图（0 = 不生成）。训练过程可视化，强烈建议开启。',
+        placeholder: '1',
         kind: 'num',
       },
       {
         key: 'sample_prompts',
         label: '示例图提示词',
         hint: '每行一个提示词；可含触发词。训练到每轮时按此出图。',
+        placeholder: '每行一个提示词',
         kind: 'textlist',
       },
       {
         key: 'sample_steps',
         label: '示例图步数',
         hint: '生成示例图用的去噪步数（20~30 常见；越高越精细越慢）。',
+        placeholder: '24',
         kind: 'num',
       },
       {
         key: 'guidance_scale',
         label: '示例图引导强度',
         hint: 'CFG 强度（4~7 常见；越高越贴提示词）。',
+        placeholder: '5.0',
         kind: 'num',
         step: 'any',
       },
@@ -422,18 +474,19 @@ const FORM_SECTIONS: { title: string; fields: FieldDef[] }[] = [
         key: 'negative_prompt',
         label: '示例图负向提示词',
         hint: '示例图的负向提示词（如 lowres, bad anatomy）。',
+        placeholder: 'lowres, bad anatomy',
         kind: 'text',
       },
       {
         key: 'sample_sampler',
         label: '示例图采样器',
         hint: 'euler_a 常用；示例图生成的扩散采样器。',
+        placeholder: 'euler_a',
         kind: 'text',
       },
     ],
   },
 ]
-
 /** 新建丹方表单的默认值（与后端 RecipeData 对齐）。 */
 function defaultData(): Record<string, unknown> {
   return {
@@ -466,22 +519,33 @@ function defaultData(): Record<string, unknown> {
   }
 }
 
+/** 参数名 + "?" 帮助标识（悬停显示参数说明）。 */
+function FieldLabel(props: { field: FieldDef }) {
+  return (
+    <span className="field-name">
+      {props.field.label}
+      <span className="field-help" title={props.field.hint} aria-label={props.field.hint}>
+        ?
+      </span>
+    </span>
+  )
+}
+
 /** 单个参数控件。 */
 function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
   const { field, value, onChange } = props
-  const title = `${field.label}：${field.hint}`
   switch (field.kind) {
     case 'bool':
       return (
-        <label className="field chk-field" title={title}>
-          <span>{field.label}</span>
+        <label className="field chk-field" title={field.hint}>
+          <FieldLabel field={field} />
           <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
         </label>
       )
     case 'select':
       return (
-        <label className="field" title={title}>
-          <span>{field.label}</span>
+        <label className="field" title={field.hint}>
+          <FieldLabel field={field} />
           <select value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
             {field.options?.map(([v, l]) => (
               <option key={v} value={v}>
@@ -493,10 +557,11 @@ function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unkn
       )
     case 'textlist':
       return (
-        <label className="field wide" title={title}>
-          <span>{field.label}</span>
+        <label className="field wide" title={field.hint}>
+          <FieldLabel field={field} />
           <textarea
             rows={2}
+            placeholder={field.placeholder}
             value={Array.isArray(value) ? value.join('\n') : String(value ?? '')}
             onChange={(e) =>
               onChange(
@@ -511,11 +576,12 @@ function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unkn
       )
     case 'num':
       return (
-        <label className="field" title={title}>
-          <span>{field.label}</span>
+        <label className="field" title={field.hint}>
+          <FieldLabel field={field} />
           <input
             type="number"
             step={field.step ?? '1'}
+            placeholder={field.placeholder}
             value={value === null || value === undefined || value === '' ? '' : Number(value)}
             onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
           />
@@ -523,9 +589,14 @@ function FieldInput(props: { field: FieldDef; value: unknown; onChange: (v: unkn
       )
     default:
       return (
-        <label className="field" title={title}>
-          <span>{field.label}</span>
-          <input type="text" value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />
+        <label className="field" title={field.hint}>
+          <FieldLabel field={field} />
+          <input
+            type="text"
+            placeholder={field.placeholder}
+            value={String(value ?? '')}
+            onChange={(e) => onChange(e.target.value)}
+          />
         </label>
       )
   }
@@ -776,7 +847,7 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
   const datasetInfo = datasets.find((d) => d.dir === datasetDir)
 
   // 全量模式：过滤 LoRA 专属分区
-  const hiddenSections = full ? ['概念与预测', '网络结构'] : []
+  const hiddenSections = full ? ['数据与概念', '网络结构'] : []
   const sections = FORM_SECTIONS.filter((sec) => !hiddenSections.includes(sec.title))
   // 全量模式：缓存与精度区只显示混合精度
   const visibleFields = (sec: { title: string; fields: FieldDef[] }) => {
@@ -872,6 +943,9 @@ export function RecipeForm(props: { onCreated: (runId: string) => void; full?: b
                   ? `${basename(datasetDir)}${datasetInfo ? `（${datasetInfo.image_count} 张）` : ''} · ${datasetDir}`
                   : '未选择数据集（图片文件夹，每图配同名 .txt 描述）'}
               </div>
+              <p className="hint">
+                训练次数 = 文件夹名前缀数字（如 <code>2_artstyle</code> 内图片各训练 2 次；无数字 = 1 次）
+              </p>
             </div>
             <div className="field wide">
               <span>VAE（可选）</span>

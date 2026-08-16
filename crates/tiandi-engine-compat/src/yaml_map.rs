@@ -30,7 +30,10 @@ pub struct AitkPaths {
 }
 
 /// 生成 ai-toolkit 训练 YAML 字符串。
-pub fn build_aitk_yaml(recipe: &RecipeData, paths: &AitkPaths) -> String {
+///
+/// `repeats`：每张图训练次数（来自数据集目录名前缀数字，如 2_artstyle → 2；
+/// UI 不再单独设置该参数）。
+pub fn build_aitk_yaml(recipe: &RecipeData, paths: &AitkPaths, repeats: u64) -> String {
     let mut s = String::new();
     s.push_str("job: extension\n");
     s.push_str("config:\n");
@@ -78,10 +81,8 @@ pub fn build_aitk_yaml(recipe: &RecipeData, paths: &AitkPaths) -> String {
     ));
     // 分辨率桶：Krea 2 训练以 1K 为上限（RunComfy 指南 512+768+1024）
     s.push_str(&format!("          resolution: [{}]\n", recipe.resolution));
-    if let Some(v) = recipe.num_repeats {
-        if v > 1 {
-            s.push_str(&format!("          num_repeats: {v}\n"));
-        }
+    if repeats > 1 {
+        s.push_str(&format!("          num_repeats: {repeats}\n"));
     }
     // ---- train ----
     s.push_str("      train:\n");
@@ -248,7 +249,7 @@ mod tests {
             trigger_word: Some("k2test".into()),
             ..RecipeData::default()
         };
-        let yaml = build_aitk_yaml(&recipe, &paths());
+        let yaml = build_aitk_yaml(&recipe, &paths(), 1);
         for key in [
             "job: extension",
             "type: 'sd_trainer'",
@@ -274,7 +275,7 @@ mod tests {
     #[test]
     fn krea2_yaml_roundtrip_parseable() {
         let recipe = RecipeData::default();
-        let yaml = build_aitk_yaml(&recipe, &paths());
+        let yaml = build_aitk_yaml(&recipe, &paths(), 1);
         // 基本结构自检（Rust 无 yaml 解析依赖：校验关键层级缩进）
         assert!(yaml.contains("  process:\n    - type:"));
         assert!(yaml.contains("      model:\n        name_or_path:"));
@@ -287,7 +288,7 @@ mod tests {
             sample_prompts: vec![],
             ..RecipeData::default()
         };
-        let yaml = build_aitk_yaml(&recipe, &paths());
+        let yaml = build_aitk_yaml(&recipe, &paths(), 1);
         // disable_sampling 是 train 级键（ai-toolkit SDTrainer 读 self.train_config.disable_sampling）
         assert!(
             yaml.contains("      train:\n        batch_size:")
@@ -314,13 +315,13 @@ mod tests {
             cache_latents: false,
             ..RecipeData::default()
         };
-        let yaml = build_aitk_yaml(&recipe, &paths());
+        let yaml = build_aitk_yaml(&recipe, &paths(), 1);
         assert!(yaml.contains("optimizer: 'prodigy'"), "{yaml}");
         assert!(yaml.contains("sampler: \"euler_a\""), "{yaml}");
         assert!(yaml.contains("seed: 12345"), "{yaml}");
         assert!(yaml.contains("cache_latents_to_disk: false"), "{yaml}");
         // 默认缓存打开
-        let yaml = build_aitk_yaml(&RecipeData::default(), &paths());
+        let yaml = build_aitk_yaml(&RecipeData::default(), &paths(), 1);
         assert!(yaml.contains("cache_latents_to_disk: true"), "{yaml}");
         // 有采样提示词时 train 段不输出 disable_sampling
         assert!(!yaml.contains("disable_sampling"), "{yaml}");
@@ -332,7 +333,7 @@ mod tests {
             optimizer: tiandi_recipe::OptimizerKind::CAME,
             ..RecipeData::default()
         };
-        let yaml = build_aitk_yaml(&recipe, &paths());
+        let yaml = build_aitk_yaml(&recipe, &paths(), 1);
         assert!(yaml.contains("optimizer: 'adamw8bit'"), "{yaml}");
         assert!(yaml.contains("回退 adamw8bit"), "{yaml}");
     }
@@ -344,7 +345,7 @@ mod tests {
             negative_prompt: Some("bad \"x\"".into()),
             ..RecipeData::default()
         };
-        let yaml = build_aitk_yaml(&recipe, &paths());
+        let yaml = build_aitk_yaml(&recipe, &paths(), 1);
         // serde_json::to_string 输出即合法 YAML 双引号字符串
         assert!(
             yaml.contains(r#"          - "a \"quoted\" prompt""#),

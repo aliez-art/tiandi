@@ -277,11 +277,8 @@ pub fn build_sdscripts_toml(
         toml_quote(&recipe.resolution.to_string())
     ));
     t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
-    if let Some(v) = recipe.num_repeats {
-        if v > 1 {
-            t.push_str(&format!("num_repeats = {v}\n"));
-        }
-    }
+    // 训练次数不输出：sd-scripts 老格式由数据集子文件夹名 `N_` 前缀控制
+    // （直接含图目录由 Rust 侧生成 `<N>_data` 镜像），num_repeats 参数已从 UI 移除。
     t.push('\n');
 
     // [sampling]
@@ -486,11 +483,8 @@ pub fn build_sdscripts_toml_full(
         toml_quote(&recipe.resolution.to_string())
     ));
     t.push_str(&format!("enable_bucket = {}\n", recipe.enable_bucket));
-    if let Some(v) = recipe.num_repeats {
-        if v > 1 {
-            t.push_str(&format!("num_repeats = {v}\n"));
-        }
-    }
+    // 训练次数不输出：sd-scripts 老格式由数据集子文件夹名 `N_` 前缀控制
+    // （直接含图目录由 Rust 侧生成 `<N>_data` 镜像），num_repeats 参数已从 UI 移除。
     t.push('\n');
 
     // [sampling]

@@ -156,7 +156,8 @@ impl SdScriptsTrainer {
             })?;
             // 总步数 = epochs × 图片数 × 重复次数 ÷ batch_size（ai-toolkit 按步训练，
             // 每步消费 batch_size 张图；除后兜底 ≥1 步）
-            let repeats = recipe.num_repeats.unwrap_or(1).max(1) as u64;
+            // repeats 来自数据集目录名前缀数字（2_artstyle → 2），UI 不再单独设置
+            let repeats = job.repeats.max(1);
             let batch_size = recipe.batch_size.max(1) as u64;
             let steps = ((dataset_image_count(job.dataset_dir.as_str()) as u64
                 * recipe.max_train_epochs as u64
@@ -179,7 +180,7 @@ impl SdScriptsTrainer {
                 vae_root: krea2.vae_root.to_string_lossy().into_owned(),
                 steps,
             };
-            let yaml = build_aitk_yaml(&recipe, &paths);
+            let yaml = build_aitk_yaml(&recipe, &paths, job.repeats);
             std::fs::write(&config_path, yaml)
                 .map_err(|e| EngineError::Spawn(format!("写训练配置失败：{e}")))?;
         } else {

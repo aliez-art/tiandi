@@ -93,10 +93,13 @@ pub async fn build_job(
     }
     // 适配"直接含图目录"：sd-scripts 的 train_data_dir 要求"父目录包含图片子文件夹"
     // （DreamBooth 布局）。若用户选择的目录直接包含图片（无含图子文件夹），
-    // 生成训练镜像 `<runs>/<run_id>/dataset/1_data/`（硬链接原图与同名 .txt），
+    // 生成训练镜像 `<runs>/<run_id>/dataset/<N>_data/`（硬链接原图与同名 .txt），
     // 让两种目录结构都能训练（图片仍在用户目录，不移动/不复制大文件）。
+    // 训练次数 repeats 取**文件夹名前缀数字**（如 2_artstyle → 2），与
+    // sd-scripts 的 `N_` 约定一致；无前缀默认 1。
     let runs_dir = state.trainer.runs_dir();
-    dataset_dir = prepare_dataset_dir(&dataset_dir, &run.id, runs_dir);
+    let repeats = repeats_from_dir(&dataset_dir);
+    dataset_dir = prepare_dataset_dir(&dataset_dir, &run.id, runs_dir, repeats);
     if let Some(mid) = &base_model_id {
         let store = state.store.lock().await;
         let m = store.get_base_model(mid).map_err(|e| e.to_string())?;
@@ -138,9 +141,23 @@ pub async fn build_job(
         family,
         base_model,
         output_name,
+        repeats,
         resume_dir,
         env,
     })
+}
+
+/// 训练次数：取文件夹名前缀数字（kohya `N_` 约定，如 `2_artstyle` → 2，
+/// `10_cat` → 10）；无数字前缀默认 1。仅对"直接含图目录"生效——
+/// 子文件夹结构下由 sd-scripts 按各子文件夹名自行解析，此处返回 1。
+fn repeats_from_dir(dataset_dir: &str) -> u64 {
+    std::path::Path::new(dataset_dir)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.split(['_', '-', ' ']).next())
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
 }
 
 /// 探测最新 sd-scripts state 目录（`<name>-<step>.state`）。
@@ -243,9 +260,15 @@ async fn recover_interrupted(state: &AppState) {
 
 /// sd-scripts 的 `train_data_dir` 要求"父目录包含图片子文件夹"（DreamBooth 布局）。
 /// 用户选择的目录若**直接包含图片**（无含图子文件夹），生成训练镜像：
-/// `<runs>/<run_id>/dataset/1_data/`（硬链接原图与同名 .txt；跨卷回退复制），
-/// 返回镜像路径供内核使用；子文件夹含图或目录不可用时原样返回。
-fn prepare_dataset_dir(dataset_dir: &str, run_id: &str, runs_dir: &std::path::Path) -> String {
+/// `<runs>/<run_id>/dataset/<N>_data/`（硬链接原图与同名 .txt；跨卷回退复制；
+/// `N` = 文件夹名前缀数字，即训练次数），返回镜像路径供内核使用；
+/// 子文件夹含图或目录不可用时原样返回。
+fn prepare_dataset_dir(
+    dataset_dir: &str,
+    run_id: &str,
+    runs_dir: &std::path::Path,
+    repeats: u64,
+) -> String {
     const IMAGE_EXTS: [&str; 5] = [".jpg", ".jpeg", ".png", ".webp", ".bmp"];
     let src = std::path::Path::new(dataset_dir);
     if !src.is_dir() {
@@ -277,9 +300,11 @@ fn prepare_dataset_dir(dataset_dir: &str, run_id: &str, runs_dir: &std::path::Pa
 
     // 直接含图：生成镜像结构
     // 注意：sd-scripts 的 train_data_dir 必须是"含图子文件夹的父目录"，
-    // 所以镜像根 = runs/<id>/dataset，图片放其子文件夹 1_data/，返回镜像根。
+    // 所以镜像根 = runs/<id>/dataset，图片放其子文件夹 <N>_data/，返回镜像根。
+    // 子文件夹名带 N_ 前缀 = 训练次数（kohya 约定，sd-scripts 原生解析）。
     let target_root = runs_dir.join(run_id).join("dataset");
-    let target = target_root.join("1_data");
+    let group_name = format!("{repeats}_data");
+    let target = target_root.join(&group_name);
     if !target.join("01.png").exists() && !target.join("01.jpg").exists() {
         let _ = std::fs::create_dir_all(&target);
         let entries = std::fs::read_dir(src)
@@ -441,20 +466,20 @@ mod tests {
     #[test]
     fn prepare_dataset_dir_mirrors_flat_image_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let flat = tmp.path().join("我的图片");
+        let flat = tmp.path().join("2_风格"); // 前缀数字 2 = 训练 2 次
         std::fs::create_dir_all(&flat).unwrap();
         std::fs::write(flat.join("01.png"), b"png").unwrap();
         std::fs::write(flat.join("01.txt"), b"1girl").unwrap();
         std::fs::write(flat.join("notes.md"), b"x").unwrap(); // 非图片忽略
         let runs = tmp.path().join("runs");
-        let out = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-1", &runs);
+        let out = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-1", &runs, 2);
         // 镜像结构：train_data_dir = runs/run-1/dataset（父目录），
-        // 图片在子文件夹 1_data/ 内（sd-scripts DreamBooth 布局）
-        assert!(std::path::Path::new(&out).join("1_data/01.png").is_file());
-        assert!(std::path::Path::new(&out).join("1_data/01.txt").is_file());
-        assert!(!std::path::Path::new(&out).join("1_data/notes.md").exists());
+        // 图片在子文件夹 2_data/ 内（N_ 前缀 = 训练次数）
+        assert!(std::path::Path::new(&out).join("2_data/01.png").is_file());
+        assert!(std::path::Path::new(&out).join("2_data/01.txt").is_file());
+        assert!(!std::path::Path::new(&out).join("2_data/notes.md").exists());
         // 幂等：再次调用不报错且内容一致
-        let out2 = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-1", &runs);
+        let out2 = super::prepare_dataset_dir(flat.to_str().unwrap(), "run-1", &runs, 2);
         assert_eq!(out, out2);
     }
 
@@ -466,7 +491,7 @@ mod tests {
         std::fs::create_dir_all(&group).unwrap();
         std::fs::write(group.join("a.png"), b"png").unwrap();
         let runs = tmp.path().join("runs");
-        let out = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-2", &runs);
+        let out = super::prepare_dataset_dir(nested.to_str().unwrap(), "run-2", &runs, 1);
         // 子文件夹含图 → 原目录直接返回，不生成镜像
         assert_eq!(out, nested.to_str().unwrap());
         assert!(!runs.join("run-2").exists());
@@ -478,7 +503,17 @@ mod tests {
             "Z:\\不存在的目录",
             "run-3",
             &std::path::PathBuf::from("Z:\\x"),
+            1,
         );
         assert_eq!(out, "Z:\\不存在的目录");
+    }
+
+    #[test]
+    fn repeats_from_dir_name_prefix() {
+        assert_eq!(super::repeats_from_dir("D:\\数据\\2_artstyle"), 2);
+        assert_eq!(super::repeats_from_dir("D:\\数据\\10_cat"), 10);
+        assert_eq!(super::repeats_from_dir("D:\\数据\\tag"), 1);
+        assert_eq!(super::repeats_from_dir("D:\\数据\\0_abc"), 1); // 0 → 兜底 1
+        assert_eq!(super::repeats_from_dir(""), 1);
     }
 }

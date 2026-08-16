@@ -34,6 +34,9 @@ pub struct TrainJob {
     pub base_model: Option<String>,
     /// 产物名（默认 run_id）
     pub output_name: Option<String>,
+    /// 每张图训练次数（repeats）：直接含图目录取目录名前缀数字（如 2_artstyle → 2），
+    /// 默认 1；子文件夹结构由内核按 `N_` 前缀自行解析，此处固定 1。
+    pub repeats: u64,
     /// 断点续训：sd-scripts state 目录（None = 从头训练）
     pub resume_dir: Option<String>,
     /// 附加环境变量（镜像源等，注入内核进程）

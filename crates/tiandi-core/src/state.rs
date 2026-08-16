@@ -68,16 +68,21 @@ impl RunState {
 
     /// 从 `self` 能否合法迁移到 `to`。
     pub fn can_transition_to(&self, to: RunState) -> bool {
+        self.legal_transitions().contains(&to)
+    }
+
+    /// 从 `self` 可合法迁移到的全部状态。
+    pub fn legal_transitions(&self) -> Vec<RunState> {
         use RunState::*;
         match self {
-            Created => matches!(to, Queued | Failed | Canceled),
-            Queued => matches!(to, Preparing | Canceled),
-            Preparing => matches!(to, Running | Failed | Canceled),
-            Running => matches!(to, Paused | Sampling | Saving | Done | Failed | Canceled),
-            Paused => matches!(to, Running | Canceled),
-            Sampling => matches!(to, Running | Saving | Done | Failed | Canceled),
-            Saving => matches!(to, Running | Done | Failed | Canceled),
-            Done | Failed | Canceled => false,
+            Created => vec![Queued, Failed, Canceled],
+            Queued => vec![Preparing, Canceled],
+            Preparing => vec![Running, Failed, Canceled],
+            Running => vec![Paused, Sampling, Saving, Done, Failed, Canceled],
+            Paused => vec![Running, Canceled],
+            Sampling => vec![Running, Saving, Done, Failed, Canceled],
+            Saving => vec![Running, Done, Failed, Canceled],
+            Done | Failed | Canceled => vec![],
         }
     }
 

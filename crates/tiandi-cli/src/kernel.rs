@@ -174,9 +174,188 @@ pub fn cmd_kernel_install(workspace: &Path, torch_index: &str) {
     println!("下一步：注册基底模型（tiandi models add 或 UI），然后创建炼丹任务。");
 }
 
+/// ai-toolkit 后端（M3：Krea 2 等 DiT 模型）独立 venv + 仓库安装。
+pub const AI_TOOLKIT_REPO: &str = "https://github.com/ostris/ai-toolkit.git";
+
+pub fn cmd_kernel_install_aitk(workspace: &Path, torch_index: &str) {
+    let kernel_dir = workspace.join(".kernel-aitk");
+    let venv = kernel_dir.join("venv");
+    let repo = kernel_dir.join("ai-toolkit");
+    let kernel_json = workspace.join(".kernel/kernel.json");
+
+    if !kernel_json.exists() {
+        eprintln!(
+            "✗ 请先安装 sd-scripts 内核（tiandi kernel install），ai-toolkit 清单会合并到同一 kernel.json"
+        );
+        std::process::exit(1);
+    }
+
+    println!("== 天地熔炉 · ai-toolkit 内核安装（Krea 2 后端）==");
+    println!("venv：{}", venv.display());
+    println!("仓库：{}", repo.display());
+
+    // 1. venv（与 sd-scripts 内核隔离，transformers 5.x 互不干扰；已存在则复用）
+    let python = locate_python();
+    println!("\n[1/5] 创建虚拟环境…");
+    let venv_python = venv_python_path(&venv);
+    if venv_python.exists() {
+        println!("  venv 已存在（复用）：{}", venv.display());
+    } else {
+        std::fs::create_dir_all(&kernel_dir).expect("创建 .kernel-aitk 目录");
+        run(
+            &[python.to_str().unwrap(), "-m", "venv", venv.to_str().unwrap()],
+            None,
+        )
+        .expect("创建 venv 失败");
+    }
+    run(
+        &[
+            venv_python.to_str().unwrap(),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+        ],
+        None,
+    )
+    .expect("升级 pip 失败");
+
+    // 2. torch cu128（torchaudio 为 ai-toolkit 必需：toolkit/config_modules import）
+    println!("\n[2/5] 安装 torch/torchvision/torchaudio（{torch_index}，约 3GB）…");
+    run(
+        &[
+            venv_python.to_str().unwrap(),
+            "-m",
+            "pip",
+            "install",
+            "torch",
+            "torchvision",
+            "torchaudio",
+            "--index-url",
+            torch_index,
+        ],
+        None,
+    )
+    .expect("torch 安装失败");
+
+    // 3. 克隆 ai-toolkit
+    println!("\n[3/5] 克隆 ai-toolkit…");
+    if !repo.exists() {
+        run(&["git", "clone", "--depth", "1", AI_TOOLKIT_REPO, repo.to_str().unwrap()], None)
+            .expect("克隆 ai-toolkit 失败");
+    }
+
+    // 4. 依赖（requirements.txt 内含 git+diffusers 固定 commit，需联网）
+    println!("\n[4/5] 安装 ai-toolkit 依赖（含 diffusers git commit，请耐心等待）…");
+    let req = repo.join("requirements.txt");
+    if !req.exists() {
+        eprintln!("✗ 未找到 ai-toolkit requirements.txt");
+        std::process::exit(1);
+    }
+    run(
+        &[
+            venv_python.to_str().unwrap(),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            req.to_str().unwrap(),
+        ],
+        None,
+    )
+    .expect("依赖安装失败");
+
+    // 5. 合并写 kernel.json（保留 sd-scripts 字段）
+    println!("\n[5/5] 合并内核清单…");
+    let torch_ver = Command::new(&venv_python)
+        .args(["-c", "import torch; print(torch.__version__)"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    let mut json: serde_json::Value = std::fs::read_to_string(&kernel_json)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    json["ai_toolkit"] = serde_json::json!({
+        "python": venv_python.to_string_lossy(),
+        "repo": repo.to_string_lossy(),
+        "torch": torch_ver,
+    });
+    std::fs::write(&kernel_json, serde_json::to_string_pretty(&json).unwrap())
+        .expect("写 kernel.json 失败");
+
+    println!("\n✓ ai-toolkit 内核安装完成！");
+    println!("下一步：tiandi kernel prepare-krea2 <底模目录>（离线转换 TE/VAE 资产）。");
+}
+
+/// Krea 2 资产准备：单文件模型 → TE/VAE 本地化目录 + 写 kernel.json krea2 字段。
+pub fn cmd_prepare_krea2(workspace: &Path, model_dir: &Path) {
+    let kernel_json = workspace.join(".kernel/kernel.json");
+    let json_text = std::fs::read_to_string(&kernel_json)
+        .expect("kernel.json 不存在（请先 tiandi kernel install）");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("kernel.json 解析失败");
+    if json.get("ai_toolkit").is_none() {
+        eprintln!("✗ kernel.json 无 ai_toolkit 字段（请先 tiandi kernel install-aitk）");
+        std::process::exit(1);
+    }
+    let aitk_python = json["ai_toolkit"]["python"]
+        .as_str()
+        .expect("ai_toolkit.python 缺失")
+        .to_string();
+    let sd_scripts = json.get("sd_scripts").and_then(|s| s.as_str()).map(String::from);
+
+    println!("== 天地熔炉 · Krea 2 资产准备 ==");
+    println!("模型目录：{}", model_dir.display());
+    // 资产输出：<workspace>/models/krea2（workspace 即数据目录，如 .kernel-ws）
+    let out_root = workspace.join("models/krea2");
+
+    // krea2_prepare.py 与 kernel_runner.py 同目录（assets 随 crate 分发）
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tiandi-engine-compat/assets/krea2_prepare.py");
+    let mut args: Vec<String> = vec![
+        script.to_str().unwrap().to_string(),
+        "--model-dir".into(),
+        model_dir.to_str().unwrap().to_string(),
+        "--out-root".into(),
+        out_root.to_str().unwrap().to_string(),
+    ];
+    if let Some(sd) = &sd_scripts {
+        args.push("--tokenizer-dir".into());
+        args.push(format!("{}\\configs\\qwen3_06b", sd));
+    }
+    // 输出 JSON 清单（最后一行 stdout）
+    let output = Command::new(&aitk_python)
+        .args(&args)
+        .output()
+        .expect("krea2_prepare.py 执行失败");
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    if !output.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        eprintln!("✗ Krea 2 资产准备失败");
+        std::process::exit(1);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let manifest_line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))
+        .expect("未找到 krea2 清单输出");
+    let krea2: serde_json::Value =
+        serde_json::from_str(manifest_line).expect("krea2 清单解析失败");
+
+    json["ai_toolkit"]["krea2"] = krea2;
+    std::fs::write(&kernel_json, serde_json::to_string_pretty(&json).unwrap())
+        .expect("写 kernel.json 失败");
+    println!("✓ Krea 2 资产就绪，kernel.json 已更新（ai_toolkit.krea2）");
+    println!("下一步：注册 Krea 2 模型（tiandi models add --family dit_krea2）后即可开炉。");
+}
+
 /// 定位系统 Python。
-fn locate_python() -> PathBuf {
-    // 1. PATH
+fn locate_python() -> PathBuf {    // 1. PATH
     if Command::new("python")
         .arg("--version")
         .output()

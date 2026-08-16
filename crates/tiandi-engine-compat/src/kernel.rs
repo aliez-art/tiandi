@@ -78,6 +78,7 @@ pub struct KernelLaunch {
 pub enum KernelMode {
     Mock,
     SdScripts,
+    Aitk,
     Tagger,
 }
 
@@ -86,6 +87,7 @@ impl KernelMode {
         match self {
             Self::Mock => "mock",
             Self::SdScripts => "sdscripts",
+            Self::Aitk => "aitk",
             Self::Tagger => "tagger",
         }
     }
@@ -249,17 +251,37 @@ pub fn publish_event(bus: &EventBus, value: &serde_json::Value, run_id: &str) {
 pub struct KernelEnv {
     pub python: Option<PathBuf>,
     pub sd_scripts: Option<PathBuf>,
+    /// ai-toolkit 后端（M3：Krea 2 等 DiT 模型；kernel.json `ai_toolkit` 字段）
+    pub aitk: Option<AitkEnv>,
     pub message: Option<String>,
+}
+
+/// ai-toolkit 内核环境（独立 venv，与 sd-scripts 隔离避免 transformers 版本冲突）。
+#[derive(Debug, Clone)]
+pub struct AitkEnv {
+    pub python: PathBuf,
+    pub repo: PathBuf,
+    /// Krea 2 资产（prepare 命令生成并写入 kernel.json）
+    pub krea2: Option<Krea2Assets>,
+}
+
+/// Krea 2 训练资产路径（本地化：MMDiT 单文件 + Qwen3-VL TE 目录 + Qwen-Image VAE 目录）。
+#[derive(Debug, Clone)]
+pub struct Krea2Assets {
+    pub mmdit: PathBuf,
+    pub text_encoder: PathBuf,
+    pub vae_root: PathBuf,
 }
 
 impl KernelEnv {
     /// `workspace`：工作区根（含 `.kernel/kernel.json`；None = 不检查内核清单）。
     pub fn detect_for(workspace: Option<&Path>) -> Self {
         if let Some(ws) = workspace {
-            if let Some((python, sd_scripts)) = read_kernel_manifest(ws) {
+            if let Some((python, sd_scripts, aitk)) = read_kernel_manifest(ws) {
                 return Self {
                     python: Some(python),
                     sd_scripts,
+                    aitk,
                     message: None,
                 };
             }
@@ -268,12 +290,14 @@ impl KernelEnv {
             Self {
                 python: Some(p),
                 sd_scripts: None,
+                aitk: None,
                 message: None,
             }
         } else {
             Self {
                 python: None,
                 sd_scripts: None,
+                aitk: None,
                 message: Some(
                     "未检测到 Python。请安装 Python 3.12+（https://www.python.org/downloads/），\
                      或运行 `tiandi doctor` 查看指引"
@@ -295,18 +319,33 @@ impl KernelEnv {
 }
 
 /// 读取 `<workspace>/.kernel/kernel.json`（kernel install 产物）。
-fn read_kernel_manifest(workspace: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+fn read_kernel_manifest(workspace: &Path) -> Option<(PathBuf, Option<PathBuf>, Option<AitkEnv>)> {
     let path = workspace.join(".kernel/kernel.json");
     let text = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     let python = v.get("python")?.as_str()?;
     let sd_scripts = v.get("sd_scripts").and_then(|s| s.as_str());
     let p = PathBuf::from(python);
-    if p.exists() {
-        Some((p, sd_scripts.map(PathBuf::from)))
-    } else {
-        None
+    if !p.exists() {
+        return None;
     }
+    // ai_toolkit 字段（可选）
+    let aitk = v.get("ai_toolkit").and_then(|a| {
+        let py = a.get("python")?.as_str()?;
+        let repo = a.get("repo")?.as_str()?;
+        let krea2 = a.get("krea2").and_then(|k| {
+            let mmdit = k.get("mmdit").and_then(|x| x.as_str()).map(PathBuf::from)?;
+            let te = k.get("text_encoder").and_then(|x| x.as_str()).map(PathBuf::from)?;
+            let vae = k.get("vae_root").and_then(|x| x.as_str()).map(PathBuf::from)?;
+            Some(Krea2Assets { mmdit, text_encoder: te, vae_root: vae })
+        });
+        Some(AitkEnv {
+            python: PathBuf::from(py),
+            repo: PathBuf::from(repo),
+            krea2,
+        })
+    });
+    Some((p, sd_scripts.map(PathBuf::from), aitk))
 }
 
 fn find_python() -> Option<PathBuf> {

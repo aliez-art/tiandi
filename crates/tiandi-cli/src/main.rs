@@ -73,6 +73,23 @@ enum KernelCommand {
         #[arg(long, default_value = "https://download.pytorch.org/whl/cu128")]
         torch_index: String,
     },
+    /// 安装 ai-toolkit 内核（Krea 2 等 DiT 模型；独立 venv 与 sd-scripts 隔离）
+    InstallAitk {
+        /// 工作区（默认当前目录，装在 <workspace>/.kernel-aitk）
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// torch wheel 索引
+        #[arg(long, default_value = "https://download.pytorch.org/whl/cu128")]
+        torch_index: String,
+    },
+    /// 准备 Krea 2 训练资产（单文件模型 → TE/VAE 本地化，离线）
+    PrepareKrea2 {
+        /// Krea 2 模型目录（含 krea2_raw / qwen3vl_4b / qwen_image_vae 单文件）
+        model_dir: PathBuf,
+        /// 工作区（默认当前目录）
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -124,6 +141,18 @@ async fn main() {
         } => {
             let root = resolve_dir(&dir);
             kernel::cmd_kernel_install(&root, &torch_index);
+        }
+        Command::Kernel {
+            command: KernelCommand::InstallAitk { dir, torch_index },
+        } => {
+            let root = resolve_dir(&dir);
+            kernel::cmd_kernel_install_aitk(&root, &torch_index);
+        }
+        Command::Kernel {
+            command: KernelCommand::PrepareKrea2 { dir, model_dir },
+        } => {
+            let root = resolve_dir(&dir);
+            kernel::cmd_prepare_krea2(&root, &model_dir);
         }
         Command::Models {
             command:

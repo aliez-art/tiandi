@@ -18,6 +18,7 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -205,6 +206,117 @@ def parse_kohya_progress(line: str):
     return event
 
 
+# ---------------------------------------------------------------- ai-toolkit 模式（Krea 2 / FLUX 等）
+
+def parse_aitk_progress(line: str):
+    """解析 ai-toolkit tqdm 进度行（stderr，非 tty 逐行输出）：
+    "  12%|██        | 12/200 [00:30<08:20, 2.66it/s, lr: 1.0e-4 loss: 1.23e-1]"
+    或 (postfix 多键) "loss: 1.2e-1 lr: 1.0e-4"
+    tqdm 行以 "|" 分隔：desc+百分比、进度条本体、统计段（含 cur/total）。
+    """
+    if "|" not in line or "/" not in line:
+        return None
+    try:
+        parts = line.split("|")
+        seg = parts[2].strip().split()[0]  # "12/200"
+        cur, total = [int(x) for x in seg.split("/")[:2]]
+    except (ValueError, IndexError):
+        return None
+    event = {"step": cur, "total": total, "epoch": 0.0}
+    if total > 0:
+        event["epoch"] = round(cur / total, 4)
+    # postfix：`lr: 1.0e-4 loss: 1.23e-1`（冒号分隔；kohya 用 loss= 已由 kohya 解析器处理）
+    m = re.search(r"loss:\s*([0-9.eE+-]+|nan)", line)
+    if m and m.group(1) != "nan":
+        try:
+            event["loss"] = round(float(m.group(1)), 6)
+        except ValueError:
+            pass
+    m = re.search(r"lr:\s*([0-9.eE+-]+)", line)
+    if m:
+        try:
+            event["lr"] = float(m.group(1))
+        except ValueError:
+            pass
+    return event
+
+
+def run_aitk(config_path: str) -> None:
+    """启动 ai-toolkit：python run.py <config.yaml>（cwd=ai-toolkit 仓库）。
+
+    事件：tqdm 行 → progress/metric；stdout 原文转发 stderr 并解析保存日志。
+    """
+    cmd = [sys.executable, "run.py", config_path]
+    log(f"启动内核：{' '.join(cmd)}")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        emit({"type": "fail", "code": 127, "tail": "ai-toolkit 内核未找到：请先完成安装（tiandi kernel install --backend aitk）"})
+        return
+
+    def control_loop():
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                cmd_msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if cmd_msg.get("cmd") == "cancel":
+                log("收到取消指令，正在终止内核...")
+                kill_tree(proc)
+
+    threading.Thread(target=control_loop, daemon=True).start()
+
+    code = None
+    tail_buf = []
+    try:
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            sys.stderr.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+            sys.stderr.buffer.flush()
+            tail_buf.append(line)
+            if len(tail_buf) > 50:
+                tail_buf.pop(0)
+            progress = parse_aitk_progress(line)
+            if progress:
+                run_id = os.environ.get("TIANDI_RUN_ID", "")
+                emit({"type": "progress", **progress})
+                if "loss" in progress:
+                    emit({
+                        "type": "metric",
+                        "run_id": run_id,
+                        "step": progress.get("step", 0),
+                        "loss": progress.get("loss"),
+                        "lr": progress.get("lr", 0.0),
+                    })
+            elif "Saved checkpoint" in line or "saving" in line.lower():
+                log(line)
+        code = proc.wait()
+    except Exception as exc:  # noqa: BLE001
+        emit({"type": "fail", "code": 1, "tail": str(exc)})
+        return
+    finally:
+        if code is None:
+            if proc.poll() is None:
+                kill_tree(proc)
+            code = proc.wait()
+    if code == 0:
+        emit({"type": "done", "code": 0})
+    else:
+        emit({"type": "fail", "code": code, "tail": "\n".join(tail_buf[-15:])})
+
+
 # ---------------------------------------------------------------- 工具
 
 def kill_tree(proc: subprocess.Popen) -> None:
@@ -318,6 +430,8 @@ def main() -> None:
         elif mode == "tagger":
             tag_mode = os.environ.get("TIANDI_TAGGER_MODE", "mock")
             run_tagger(os.environ.get("TIANDI_TAGGER_DIR", "."), tag_mode)
+        elif mode == "aitk":
+            run_aitk(config_path)
         else:
             run_sdscripts(config_path)
     except Exception as exc:  # noqa: BLE001

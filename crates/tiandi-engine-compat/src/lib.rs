@@ -6,6 +6,7 @@
 
 pub mod kernel;
 pub mod toml_map;
+pub mod yaml_map;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use crate::kernel::{
     publish_event, spawn_kernel, KernelEnv, KernelHandle, KernelLaunch, KernelMode,
 };
 use crate::toml_map::{build_sdscripts_toml, TrainPaths};
+use crate::yaml_map::{build_aitk_yaml, AitkPaths};
 
 /// SdScripts 后端训练器：驱动 Python 内核（真实 sd-scripts 或 mock）。
 pub struct SdScriptsTrainer {
@@ -85,10 +87,21 @@ impl SdScriptsTrainer {
     }
 
     fn kernel_launch(&self, job: &TrainJob, mode: KernelMode) -> Result<KernelLaunch, EngineError> {
-        let python =
-            self.env.python.clone().ok_or_else(|| {
-                EngineError::NotReady(self.env.message.clone().unwrap_or_default())
-            })?;
+        // aitk 模式用 ai-toolkit 独立 venv；其余用 sd-scripts venv（或系统 Python）
+        let python = if mode == KernelMode::Aitk {
+            self.env
+                .aitk
+                .clone()
+                .map(|a| a.python)
+                .ok_or_else(|| EngineError::NotReady("ai-toolkit 内核未安装（tiandi kernel install --backend aitk）".into()))?
+        } else {
+            self.env
+                .python
+                .clone()
+                .ok_or_else(|| {
+                    EngineError::NotReady(self.env.message.clone().unwrap_or_default())
+                })?
+        };
 
         // 任务目录
         let run_dir = self.runs_dir.join(&job.run_id);
@@ -100,11 +113,47 @@ impl SdScriptsTrainer {
                 .map_err(|e| EngineError::Spawn(format!("创建任务目录失败：{e}")))?;
         }
 
-        // 任务配置：mock 写占位；sdscripts 由丹方生成（与 kohya 键名对齐）
-        let config_path = run_dir.join("train_config.toml");
+        // 任务配置：mock 写占位；sdscripts 由丹方生成（与 kohya 键名对齐）；
+        // aitk 由丹方生成 YAML（Krea 2 等 DiT 模型）
+        let config_path = run_dir.join(if mode == KernelMode::Aitk {
+            "train_config.yaml"
+        } else {
+            "train_config.toml"
+        });
         if mode == KernelMode::Mock {
             std::fs::write(&config_path, "# mock 任务配置（占位）\n")
                 .map_err(|e| EngineError::Spawn(format!("写 mock 配置失败：{e}")))?;
+        } else if mode == KernelMode::Aitk {
+            let recipe: RecipeData = serde_json::from_value(job.params.clone())
+                .map_err(|e| EngineError::Spawn(format!("丹方参数解析失败：{e}")))?;
+            let aitk = self
+                .env
+                .aitk
+                .clone()
+                .ok_or_else(|| EngineError::NotReady("ai-toolkit 内核未安装（tiandi kernel install --backend aitk）".into()))?;
+            let krea2 = aitk.krea2.clone().ok_or_else(|| {
+                EngineError::NotReady(
+                    "Krea 2 资产未就绪（tiandi kernel prepare-krea2 <底模目录>）".into(),
+                )
+            })?;
+            // 总步数 = epochs × 数据集图片数（ai-toolkit 按步训练）
+            let steps = dataset_image_count(job.dataset_dir.as_str()) as u64 * recipe.max_train_epochs as u64;
+            let paths = AitkPaths {
+                base_model: job.base_model.clone().unwrap_or_default(),
+                dataset_dir: job.dataset_dir.clone(),
+                training_folder: run_dir.join("checkpoints").to_string_lossy().into_owned(),
+                output_name: job
+                    .output_name
+                    .clone()
+                    .unwrap_or_else(|| job.run_id.clone())
+                    .to_string(),
+                text_encoder: krea2.text_encoder.to_string_lossy().into_owned(),
+                vae_root: krea2.vae_root.to_string_lossy().into_owned(),
+                steps,
+            };
+            let yaml = build_aitk_yaml(&recipe, &paths);
+            std::fs::write(&config_path, yaml)
+                .map_err(|e| EngineError::Spawn(format!("写训练配置失败：{e}")))?;
         } else {
             let recipe: RecipeData = serde_json::from_value(job.params.clone())
                 .map_err(|e| EngineError::Spawn(format!("丹方参数解析失败：{e}")))?;
@@ -185,8 +234,20 @@ impl SdScriptsTrainer {
             env.push(("TIANDI_MOCK_INTERVAL".into(), "0.15".into()));
         }
 
-        // cwd：sd-scripts 目录（训练脚本相对解析）；未知时用任务目录
-        let cwd = self.env.sd_scripts.clone().unwrap_or(run_dir.clone());
+        // cwd：sd-scripts 目录（训练脚本相对解析）；aitk 用 ai-toolkit 仓库；
+        // 未知时用任务目录
+        let cwd = if mode == KernelMode::Aitk {
+            self.env
+                .aitk
+                .clone()
+                .ok_or_else(|| EngineError::NotReady("ai-toolkit 内核未安装".into()))?
+                .repo
+        } else {
+            self.env
+                .sd_scripts
+                .clone()
+                .unwrap_or(run_dir.clone())
+        };
 
         Ok(KernelLaunch {
             python,
@@ -229,6 +290,31 @@ impl SdScriptsTrainer {
     }
 }
 
+/// 扫描数据集目录图片数（ai-toolkit 总步数换算：steps = epochs × 图片数）。
+fn dataset_image_count(dataset_dir: &str) -> usize {
+    const EXTS: [&str; 5] = [".jpg", ".jpeg", ".png", ".webp", ".bmp"];
+    let mut count = 0;
+    let mut stack = vec![PathBuf::from(dataset_dir)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if name == "thumbs" || name == ".cache" {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if EXTS.iter().any(|e| name.ends_with(e)) {
+                count += 1;
+            }
+        }
+    }
+    count.max(1)
+}
+
 impl Trainer for SdScriptsTrainer {
     fn info(&self) -> EngineInfo {
         EngineInfo {
@@ -239,9 +325,11 @@ impl Trainer for SdScriptsTrainer {
     }
 
     fn start(&self, job: TrainJob) -> Result<(), EngineError> {
-        // 有丹方 → 真实 sd-scripts 模式；无丹方 → mock（协议联调/UI 演示）
+        // 无丹方 → mock（协议联调/UI 演示）；Krea 2 族 → ai-toolkit；其余 → sd-scripts
         let mode = if job.params.is_null() || job.recipe_path.is_empty() {
             KernelMode::Mock
+        } else if job.family == tiandi_core::ModelFamily::DitKrea2 {
+            KernelMode::Aitk
         } else {
             KernelMode::SdScripts
         };

@@ -178,22 +178,34 @@ fn hue_to_rgb(h: f32, t: f32) -> u8 {
     ((r + m) * 255.0) as u8
 }
 
-/// 扫描 runs/<id>/checkpoints 下的 LoRA 产物（*.safetensors）入库。
+/// 扫描 runs/<id>/checkpoints 下的 LoRA 产物（*.safetensors，递归；ai-toolkit
+/// 后端产物在 <name>/ 子目录）入库。
 fn scan_lora_artifacts(
     store: &tokio::sync::MutexGuard<'_, tiandi_state::Store>,
     runs_dir: &Path,
     run_id: &str,
 ) {
     let ckpts = runs_dir.join(run_id).join("checkpoints");
-    let Ok(entries) = std::fs::read_dir(&ckpts) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !path.is_file() || !name.ends_with(".safetensors") {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut stack = vec![ckpts];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("safetensors"))
+            {
+                files.push(path);
+            }
         }
+    }
+    for path in files {
         // 已入库则跳过（幂等）
         let rel = path
             .strip_prefix(runs_dir)
@@ -218,7 +230,7 @@ fn scan_lora_artifacts(
     }
 }
 
-/// 推进状态机：若非法（如 Queued→Running 中间态缺失），沿合法路径补跳。
+/// 推进状态机：若非法（如 Preparing→Done 中间态缺失），沿合法路径补跳。
 async fn advance(
     store: &mut tokio::sync::MutexGuard<'_, tiandi_state::Store>,
     bus: &tiandi_core::EventBus,
@@ -226,14 +238,8 @@ async fn advance(
     from: RunState,
     to: RunState,
 ) {
-    // 合法路径兜底：Queued → Preparing → Running
-    let path: Vec<RunState> = if from == RunState::Queued && to == RunState::Running {
-        vec![RunState::Preparing, RunState::Running]
-    } else if from.can_transition_to(to) {
-        vec![to]
-    } else {
-        vec![]
-    };
+    // 沿状态机合法边找一条 from→to 的路径（BFS；状态空间极小）
+    let path = find_state_path(from, to);
     for target in path {
         let current = match store.get_run(run_id) {
             Ok(r) => r.state,
@@ -251,6 +257,40 @@ async fn advance(
             });
         }
     }
+}
+
+/// BFS 找合法状态路径（from == to → 空）。
+fn find_state_path(from: RunState, to: RunState) -> Vec<RunState> {
+    use std::collections::{HashMap, VecDeque};
+    if from == to {
+        return vec![];
+    }
+    let mut prev: HashMap<RunState, RunState> = HashMap::new();
+    let mut queue = VecDeque::from([from]);
+    while let Some(cur) = queue.pop_front() {
+        for next in cur.legal_transitions() {
+            if prev.contains_key(&next) {
+                continue;
+            }
+            prev.insert(next, cur);
+            if next == to {
+                // 回溯路径
+                let mut path = vec![to];
+                let mut cur = to;
+                while let Some(p) = prev.get(&cur) {
+                    path.push(*p);
+                    cur = *p;
+                    if *p == from {
+                        break;
+                    }
+                }
+                path.reverse();
+                return path;
+            }
+            queue.push_back(next);
+        }
+    }
+    vec![]
 }
 
 fn ev_run_id(ev: &Event) -> Option<&str> {

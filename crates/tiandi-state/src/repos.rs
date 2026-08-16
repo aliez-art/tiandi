@@ -262,6 +262,22 @@ impl Store {
             })
     }
 
+    /// 删除数据集记录及图像索引（不存在则 NotFound）。
+    pub fn delete_dataset(&self, id: &str) -> Result<(), RepoError> {
+        self.conn
+            .execute("DELETE FROM image_files WHERE dataset_id = ?1", [id])?;
+        let n = self
+            .conn
+            .execute("DELETE FROM datasets WHERE id = ?1", [id])?;
+        if n == 0 {
+            return Err(RepoError::NotFound {
+                entity: "dataset",
+                id: id.into(),
+            });
+        }
+        Ok(())
+    }
+
     // ---- Recipe ----
 
     pub fn insert_recipe(&self, r: &Recipe) -> Result<(), RepoError> {

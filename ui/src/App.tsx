@@ -11,8 +11,6 @@ import {
   type SystemInfo,
 } from './api'
 import Console, { type EventLine } from './components/Console'
-import DatasetView from './components/DatasetView'
-import SettingsView from './components/SettingsView'
 import { NewRunBar, RecipeManager } from './components/TrainSetup'
 
 const STATE_LABEL: Record<string, string> = {
@@ -128,6 +126,22 @@ export default function App() {
     }
   }
 
+  /** 清空全部已结束任务（串行删除）。 */
+  const onClearFinished = async () => {
+    const finished = runs.filter((r) => r.state === 'done' || r.state === 'failed' || r.state === 'canceled')
+    if (finished.length === 0) return
+    if (!window.confirm(`清空 ${finished.length} 条已结束的炼丹记录（含日志/产物，不可恢复）？`)) return
+    for (const r of finished) {
+      try {
+        await deleteRun(r.id)
+      } catch {
+        /* 单条失败继续 */
+      }
+    }
+    setSelected(null)
+    await refreshRuns()
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -154,7 +168,7 @@ export default function App() {
       </header>
 
       <main className="single-layout">
-        {/* 左列：点火 + 药材 + 炉房 */}
+        {/* 左列：点火（底模/数据集/丹方/点火） */}
         <aside className="config-col">
           <section className="panel">
             <h2>点火</h2>
@@ -166,26 +180,23 @@ export default function App() {
               onOpenRecipes={() => setShowRecipes(true)}
             />
           </section>
-
-          <details className="panel fold" open={false}>
-            <summary>药材 · 模型与数据集</summary>
-            <div className="fold-body">
-              <DatasetView />
-            </div>
-          </details>
-
-          <details className="panel fold">
-            <summary>炉房 · 镜像源设置</summary>
-            <div className="fold-body">
-              <SettingsView />
-            </div>
-          </details>
         </aside>
 
         {/* 右列：炼丹记录 + 控制台 */}
         <section className="watch-col">
           <div className="panel">
-            <h2>炼丹记录</h2>
+            <div className="panel-title">
+              <h2>炼丹记录</h2>
+              {runs.some((r) => r.state === 'done' || r.state === 'failed' || r.state === 'canceled') && (
+                <button
+                  className="secondary"
+                  onClick={() => void onClearFinished()}
+                  title="删除所有已结束（出炉/炸炉/已取消）的任务"
+                >
+                  清空已结束
+                </button>
+              )}
+            </div>
             {runs.length === 0 ? (
               <p className="hint">还没有任务。在左侧选齐底模、数据集与丹方后点「点火炼丹」。</p>
             ) : (
@@ -199,18 +210,16 @@ export default function App() {
                     <span className="run-id">{r.id.slice(0, 8)}</span>
                     <span className="run-state">{STATE_LABEL[r.state] ?? r.state}</span>
                     <span className="run-time">{new Date(r.created_at).toLocaleTimeString()}</span>
-                    {r.state === 'done' || r.state === 'failed' || r.state === 'canceled' ? (
-                      <button
-                        className="run-del"
-                        title="删除任务（含产物）"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void onDeleteRun(r)
-                        }}
-                      >
-                        ✕
-                      </button>
-                    ) : null}
+                    <button
+                      className="run-del"
+                      title="删除任务（含日志/产物/采样）"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void onDeleteRun(r)
+                      }}
+                    >
+                      ✕
+                    </button>
                   </li>
                 ))}
               </ul>

@@ -20,10 +20,25 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/datasets", get(list_datasets).post(create_dataset))
-        .route("/api/datasets/{id}", get(get_dataset))
+        .route(
+            "/api/datasets/{id}",
+            get(get_dataset).delete(delete_dataset),
+        )
         .route("/api/datasets/{id}/scan", post(scan_dataset))
         .route("/api/datasets/{id}/images", get(list_images))
         .route("/api/datasets/{id}/buckets", get(bucket_distribution))
+}
+
+// ---------- 删除 ----------
+
+/// `DELETE /api/datasets/{id}`：删除数据集记录与图像索引（磁盘文件不动）。
+async fn delete_dataset(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let store = state.store.lock().await;
+    store.delete_dataset(&id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- CRUD ----------

@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  createDataset,
   createRecipe,
   createRun,
+  deleteDataset,
   deleteRecipe,
   listDatasets,
   listModels,
   listRecipes,
+  pickDir,
   pickFile,
   registerModel,
+  scanDataset,
   startRun,
   type BaseModel,
   type Dataset,
@@ -552,6 +556,127 @@ export function RecipeManager(props: { onClose: () => void; onPick?: (r: RecipeV
   )
 }
 
+/** 数据集管理：列表 / 注册（目录选择）/ 扫描 / 删除。 */
+export function DatasetManager(props: { onClose: () => void; onPick?: (d: Dataset) => void }) {
+  const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const refresh = async () => {
+    const list = await listDatasets()
+    setDatasets(list)
+    setSelected((prev) => (prev && list.some((d) => d.id === prev) ? prev : list[0]?.id ?? null))
+  }
+
+  useEffect(() => {
+    void refresh().catch(() => {})
+  }, [])
+
+  const onPickDir = async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const path = await pickDir()
+      if (!path) return
+      const name = path.split(/[\\/]/).pop() ?? '数据集'
+      const ds = await createDataset(name, path)
+      await refresh()
+      setSelected(ds.id)
+      setMsg(`已注册数据集「${name}」，点「扫描」导入图像`)
+    } catch (e) {
+      setMsg(`注册失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onScan = async () => {
+    if (!selected) return
+    setBusy(true)
+    setMsg('扫描中…')
+    try {
+      const res = await scanDataset(selected)
+      setMsg(
+        `扫描完成：${res.report.total} 张有效 · ${res.report.duplicate_groups.length} 组重复 · ${res.report.buckets.length} 个桶`,
+      )
+      await refresh()
+    } catch (e) {
+      setMsg(`扫描失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onDelete = async (d: Dataset) => {
+    if (!window.confirm(`删除数据集「${d.name}」？仅移除记录，磁盘图片不受影响。`)) return
+    try {
+      await deleteDataset(d.id)
+      await refresh()
+    } catch (e) {
+      setMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  return (
+    <Dialog title="数据集" onClose={props.onClose}>
+      <div className="actions">
+        <button onClick={() => void onPickDir()} disabled={busy} className="secondary">
+          注册数据集（选择文件夹）…
+        </button>
+        {selected && (
+          <button onClick={() => void onScan()} disabled={busy} className="secondary">
+            扫描（导入/去重/分桶）
+          </button>
+        )}
+      </div>
+      <ul className="runs datasets">
+        {datasets.length === 0 ? (
+          <p className="hint">还没有数据集，点上方按钮选择图片文件夹注册。</p>
+        ) : (
+          datasets.map((d) => (
+            <li
+              key={d.id}
+              className={`run ${d.id === selected ? 'active' : ''}`}
+              onClick={() => setSelected(d.id)}
+            >
+              <span className="run-id">{d.name}</span>
+              <span className="run-state">{d.image_count} 张</span>
+              <span className="run-time" title={d.dir}>
+                {d.dir}
+              </span>
+              <span className="gallery-actions">
+                {props.onPick && (
+                  <button
+                    className="secondary"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      props.onPick?.(d)
+                    }}
+                  >
+                    选用
+                  </button>
+                )}
+                <button
+                  className="danger"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void onDelete(d)
+                  }}
+                >
+                  删除
+                </button>
+              </span>
+            </li>
+          ))
+        )}
+      </ul>
+      {msg && <p className="status-line">{msg}</p>}
+      <p className="hint">提示：图片文件夹内每张图配一个同名 .txt 写描述（01.png + 01.txt），训练读取此描述。</p>
+    </Dialog>
+  )
+}
+
 /** 扁平操作条：选底模（文件对话框）→ 选数据集 → 选丹方 → 点火。 */
 export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRecipes: () => void }) {
   const [models, setModels] = useState<BaseModel[]>([])
@@ -563,6 +688,7 @@ export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRec
   const [recipeId, setRecipeId] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [showDatasets, setShowDatasets] = useState(false)
 
   const refresh = async () => {
     const [m, d, r] = await Promise.all([listModels(), listDatasets(), listRecipes()])
@@ -636,17 +762,22 @@ export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRec
       <span className={`firebar-model ${selectedModel ? '' : 'dim'}`} title={selectedModel?.path ?? ''}>
         {selectedModel ? selectedModel.name : '未选择底模'}
       </span>
-      <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)} title="训练数据集">
-        {datasets.length === 0 ? (
-          <option value="">（先到「药材」注册数据集）</option>
-        ) : (
-          datasets.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}（{d.image_count} 张）
-            </option>
-          ))
-        )}
-      </select>
+      <div className="firebar-row">
+        <select value={datasetId} onChange={(e) => setDatasetId(e.target.value)} title="训练数据集">
+          {datasets.length === 0 ? (
+            <option value="">（暂无数据集）</option>
+          ) : (
+            datasets.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}（{d.image_count} 张）
+              </option>
+            ))
+          )}
+        </select>
+        <button onClick={() => setShowDatasets(true)} className="secondary" title="数据集管理（注册/扫描/删除）">
+          数据集
+        </button>
+      </div>
       <div className="firebar-row">
         <select value={recipeId} onChange={(e) => setRecipeId(e.target.value)} title="丹方">
           {recipes.length === 0 ? (
@@ -667,6 +798,15 @@ export function NewRunBar(props: { onCreated: (runId: string) => void; onOpenRec
         {busy ? '处理中…' : '点火炼丹'}
       </button>
       {msg && <div className="firebar-msg">{msg}</div>}
+      {showDatasets && (
+        <DatasetManager
+          onClose={() => setShowDatasets(false)}
+          onPick={(d) => {
+            setDatasetId(d.id)
+            setShowDatasets(false)
+          }}
+        />
+      )}
     </div>
   )
 }

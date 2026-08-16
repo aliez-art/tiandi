@@ -326,8 +326,8 @@ textarea {
 
 /* 任务删除按钮（终态任务 hover 显示） */
 .run { position: relative; }
-.run-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--ink-dim); cursor: pointer; opacity: 0; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
-.run:hover .run-del { opacity: 1; }
+.run-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: none; color: var(--ink-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+.run-del:hover { color: var(--cinnabar); background: rgba(199, 68, 46, 0.15); }
 .run-del:hover { color: var(--cinnabar); background: rgba(199, 68, 46, 0.15); }
 
 /* 分区表单 */
@@ -369,3 +369,4 @@ textarea {
 .fold-body .create-row { grid-template-columns: 1fr; }
 .fold-body .actions { flex-wrap: wrap; }
 .fold-body .dataset-view { gap: 10px; }
+

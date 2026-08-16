@@ -224,6 +224,11 @@ export async function scanDataset(
   return res.json()
 }
 
+export async function deleteDataset(id: string): Promise<void> {
+  const res = await fetch(`${base()}/api/datasets/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`delete dataset ${res.status}`)
+}
+
 export interface BaseModel {
   id: string
   name: string

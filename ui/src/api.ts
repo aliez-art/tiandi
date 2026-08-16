@@ -36,9 +36,9 @@ export interface MetricPoint {
   lr: number | null
 }
 
-/** 采样图/产物 URL（runs 静态服务）。 */
+/** 采样图/产物 URL（runs 静态服务，/runs/ 前缀）。 */
 export function assetUrl(path: string): string {
-  return `${base()}/${path}`
+  return `${base()}/runs/${path}`
 }
 
 let apiBase: string | null = null

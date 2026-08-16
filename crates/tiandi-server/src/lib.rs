@@ -54,13 +54,43 @@ impl AppState {
 pub fn build_router(state: AppState) -> Router {
     // 本地单用户工具：WebView（tauri://localhost）与纯浏览器模式均需跨源访问，
     // 且服务只绑 127.0.0.1，permissive CORS 无风险（PRD §7 安全要求）。
-    // 非 API 路径 → runs 静态文件（采样图等产物）。
+    // 路由：/api/* → API；/runs/* → runs 静态（采样图/产物）；其余 → UI（SPA，若存在）。
     let runs_dir = state.trainer.runs_dir().to_path_buf();
     let serve_runs =
         tower_http::services::ServeDir::new(&runs_dir).append_index_html_on_directories(false);
-    api::router(state)
+    let mut router = api::router(state)
         .layer(tower_http::cors::CorsLayer::permissive())
-        .fallback_service(serve_runs)
+        .nest_service("/runs", serve_runs.clone());
+    match ui_dist_dir() {
+        // 一键启动模式：服务 UI 构建产物（SPA fallback 到 index.html）
+        Some(ui) => {
+            let spa = tower_http::services::ServeDir::new(&ui)
+                .append_index_html_on_directories(true)
+                .fallback(tower_http::services::ServeFile::new(ui.join("index.html")));
+            router = router.fallback_service(spa);
+        }
+        // 无 UI 产物：保持旧行为（runs 静态兜底）
+        None => {
+            router = router.fallback_service(serve_runs);
+        }
+    }
+    router
+}
+
+/// UI 构建产物目录（`<repo>/ui/dist`）；可用 `TIANDI_UI_DIR` 覆盖。
+///
+/// 从编译路径推导：`crates/tiandi-server` → 上两级 = 仓库根 → `ui/dist`。
+/// 发布安装（cargo install 等）后该路径不存在，返回 None（仅 API + runs 静态）。
+fn ui_dist_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("TIANDI_UI_DIR") {
+        let p = PathBuf::from(dir);
+        return p.is_dir().then_some(p);
+    }
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .parent()?
+        .join("ui/dist");
+    p.is_dir().then_some(p)
 }
 
 /// 服务器配置。
